@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Design de recursos e URIs</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-alt: #f6f7f9;
+    --text: #1c1e21;
+    --text-muted: #5a5f66;
+    --border: #e2e4e8;
+    --accent: #2f6feb;
+    --accent-soft: #eaf1fd;
+    --code-bg: #f0f1f3;
+    --quote-bg: #fbf6e9;
+    --quote-border: #d9b53c;
+    --ok: #1a7f37;
+    --ok-soft: #e7f6ec;
+    --err: #cf222e;
+    --err-soft: #ffebe9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --bg-alt: #1c1f24;
+      --text: #e6e8eb;
+      --text-muted: #9aa0a8;
+      --border: #2b2f36;
+      --accent: #6ea8ff;
+      --accent-soft: #1b2636;
+      --code-bg: #21242a;
+      --quote-bg: #23201a;
+      --quote-border: #b8922e;
+      --ok: #56d364;
+      --ok-soft: #17281c;
+      --err: #ff7b72;
+      --err-soft: #2b1615;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.7;
+  }
+  .layout {
+    display: flex;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  nav.toc {
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    width: 260px;
+    flex-shrink: 0;
+    padding: 2.5rem 1.25rem 2rem 1.5rem;
+    height: 100vh;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+  }
+  nav.toc h2 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin: 0 0 0.75rem;
+  }
+  nav.toc ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-size: 0.9rem;
+  }
+  nav.toc li { margin-bottom: 0.55rem; }
+  nav.toc a {
+    color: var(--text-muted);
+    text-decoration: none;
+  }
+  nav.toc a:hover { color: var(--accent); }
+  .toc-prev, .toc-next {
+    display: block;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-decoration: none;
+  }
+  .toc-prev {
+    margin-bottom: 1.75rem;
+    padding-bottom: 1.25rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .toc-next {
+    margin-top: 1.75rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--border);
+    text-align: right;
+  }
+  .toc-prev:hover, .toc-next:hover { color: var(--accent); }
+  main {
+    flex: 1;
+    min-width: 0;
+    padding: 2.5rem 3rem 6rem;
+  }
+  .eyebrow {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+  h1 {
+    font-size: 2.1rem;
+    margin: 0 0 0.75rem;
+    line-height: 1.25;
+  }
+  .subtitle {
+    color: var(--text-muted);
+    font-size: 1.02rem;
+    max-width: 60ch;
+    margin-bottom: 2.5rem;
+  }
+  h2 {
+    font-size: 1.4rem;
+    margin: 3rem 0 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 1.12rem;
+    margin: 2rem 0 0.75rem;
+    color: var(--text);
+  }
+  p { margin: 0 0 1rem; max-width: 78ch; }
+  ul, ol { max-width: 78ch; padding-left: 1.4rem; }
+  li { margin-bottom: 0.4rem; }
+  strong { color: var(--text); }
+  em { color: var(--text-muted); }
+  code {
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem 1.25rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    max-width: 78ch;
+    margin: 1.25rem 0;
+    border: 1px solid var(--border);
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    font-size: 0.85rem;
+    line-height: 1.6;
+  }
+  blockquote {
+    margin: 1.5rem 0;
+    padding: 0.9rem 1.25rem;
+    background: var(--quote-bg);
+    border-left: 3px solid var(--quote-border);
+    border-radius: 0 6px 6px 0;
+    max-width: 74ch;
+  }
+  blockquote p:last-child { margin-bottom: 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1.5rem 0;
+    font-size: 0.92rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.65rem 0.9rem;
+    border: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: var(--bg-alt);
+    font-weight: 600;
+  }
+  tr:nth-child(even) td { background: var(--bg-alt); }
+  .ok { color: var(--ok); font-weight: 600; }
+  .err { color: var(--err); font-weight: 600; }
+  .example {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin: 1.25rem 0;
+  }
+  .example > div {
+    flex: 1;
+    min-width: 260px;
+    padding: 1rem 1.25rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .example .good { background: var(--ok-soft); border-color: var(--ok); }
+  .example .bad { background: var(--err-soft); border-color: var(--err); }
+  .example h4 {
+    margin: 0 0 0.6rem;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .example .good h4 { color: var(--ok); }
+  .example .bad h4 { color: var(--err); }
+  .example code {
+    display: block;
+    background: none;
+    padding: 0.15rem 0;
+    font-size: 0.86rem;
+  }
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2.5rem 0;
+  }
+  .callout {
+    background: var(--accent-soft);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin: 1.5rem 0;
+    max-width: 74ch;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+  .next-steps {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem 1.75rem;
+    margin-top: 1.5rem;
+  }
+  .next-steps ol { padding-left: 1.2rem; }
+  footer.closing {
+    margin-top: 2rem;
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    max-width: 74ch;
+  }
+  @media (max-width: 900px) {
+    nav.toc { display: none; }
+    main { padding: 2rem 1.25rem 4rem; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav class="toc">
+  <a class="toc-prev" href="02-http-na-pratica.html">&larr; 2. HTTP na prática</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#recursos-nao-acoes">1. Recursos, não ações</a></li>
+    <li><a href="#regras-nomeacao">2. Regras de nomeação de URIs</a></li>
+    <li><a href="#colecao-vs-item">3. Coleção vs. item</a></li>
+    <li><a href="#aninhamento">4. Aninhamento de recursos</a></li>
+    <li><a href="#acoes-que-nao-sao-crud">5. Ações que não são CRUD puro</a></li>
+    <li><a href="#filtros-busca">6. Filtros e busca</a></li>
+    <li><a href="#paginacao">7. Paginação</a></li>
+    <li><a href="#ordenacao">8. Ordenação</a></li>
+    <li><a href="#erros-comuns">9. Erros conceituais comuns</a></li>
+    <li><a href="#proximos-passos">10. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="04-escolha-de-stack.html">4. Escolha de stack &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Material de estudo — API REST — Parte 3</div>
+  <h1>Design de recursos e URIs</h1>
+  <p class="subtitle">Parte 1 explicou a teoria, parte 2 explicou o protocolo. Agora é a parte que você mais vai usar no dia a dia: <strong>como nomear endpoints</strong> pra que qualquer pessoa (ou você, 6 meses depois) entenda a API só de olhar a URI.</p>
+
+  <h2 id="recursos-nao-acoes">1. Recursos, não ações</h2>
+  <p>A regra mãe, de onde todas as outras derivam: <strong>URI identifica uma coisa (recurso), não uma ação</strong>. A ação já está no verbo HTTP (parte 2). Repetir a ação na URI é redundante e é o sinal mais claro de uma API "RPC disfarçada de REST".</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Evitar</h4>
+      <code>GET /getPedidos</code>
+      <code>POST /criarPedido</code>
+      <code>POST /deletarPedido/501</code>
+      <code>POST /pedidos/501/atualizar</code>
+    </div>
+    <div class="good">
+      <h4>Preferir</h4>
+      <code>GET /pedidos</code>
+      <code>POST /pedidos</code>
+      <code>DELETE /pedidos/501</code>
+      <code>PATCH /pedidos/501</code>
+    </div>
+  </div>
+  <p>Na coluna da direita, o verbo já diz "criar", "deletar", "atualizar" — repetir isso no caminho é ruído. A URI só precisa dizer <em>qual recurso</em>.</p>
+
+  <h2 id="regras-nomeacao">2. Regras de nomeação de URIs</h2>
+  <ul>
+    <li><strong>Substantivos, sempre no plural</strong>: <code>/pedidos</code>, não <code>/pedido</code>. Mesmo pra buscar um item único (<code>/pedidos/501</code>), a coleção continua no plural — só muda o que vem depois.</li>
+    <li><strong>Minúsculo, sem acentuação</strong>: <code>/produtos</code>, não <code>/Produtos</code> ou <code>/prodútos</code>. URIs são tecnicamente case-sensitive; minúsculo evita ambiguidade e bugs bobos.</li>
+    <li><strong>kebab-case pra palavras compostas</strong>: <code>/itens-pedido</code>, não <code>/itensPedido</code> nem <code>/itens_pedido</code>. Convenção de mercado predominante em URIs (diferente de JSON, onde <code>camelCase</code> é comum nos nomes de campo).</li>
+    <li><strong>Sem barra no final</strong>: <code>/pedidos</code>, não <code>/pedidos/</code>. Escolha uma forma e seja consistente — servidores tratam as duas como coisas diferentes por padrão.</li>
+    <li><strong>Sem extensão de arquivo</strong>: <code>/relatorios/3</code>, não <code>/relatorios/3.json</code>. Formato se negocia pelo header <code>Accept</code> (parte 2), não pela URI.</li>
+    <li><strong>Identificador do recurso é opaco</strong>: cliente não deveria precisar "decodificar" ou montar lógica em cima do formato do ID (seja número sequencial, UUID, o que for) — trata como string opaca.</li>
+  </ul>
+
+  <h2 id="colecao-vs-item">3. Coleção vs. item</h2>
+  <p>Já apresentado na parte 1, vale reforçar o padrão de URI:</p>
+  <pre><code>GET    /pedidos        &lt;- coleção: lista de pedidos
+POST   /pedidos        &lt;- cria um novo pedido dentro da coleção
+GET    /pedidos/501    &lt;- item: um pedido específico
+PUT    /pedidos/501    &lt;- substitui esse item
+PATCH  /pedidos/501    &lt;- atualiza parte desse item
+DELETE /pedidos/501    &lt;- remove esse item</code></pre>
+  <p>Padrão: coleção nunca recebe <code>PUT</code>/<code>PATCH</code>/<code>DELETE</code> diretamente (não faz sentido "substituir todos os pedidos de uma vez" na maioria dos casos) — essas operações agem sobre um item.</p>
+
+  <h2 id="aninhamento">4. Aninhamento de recursos</h2>
+  <p>Quando um recurso só existe <strong>no contexto</strong> de outro (relação de posse/composição), aninha na URI:</p>
+  <pre><code>GET /pedidos/501/itens       &lt;- itens do pedido 501
+GET /pedidos/501/itens/7     &lt;- item específico desse pedido</code></pre>
+  <p>Mas cuidado com aninhamento profundo demais — fica ilegível e acopla URIs a uma hierarquia rígida:</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Evitar (aninhamento excessivo)</h4>
+      <code>/clientes/42/pedidos/501/itens/7/avaliacoes/3</code>
+    </div>
+    <div class="good">
+      <h4>Preferir (achatar a partir de 2 níveis)</h4>
+      <code>/pedidos/501/itens/7</code>
+      <code>/avaliacoes/3</code>
+    </div>
+  </div>
+  <p>Regra prática de mercado: aninha <strong>1 nível</strong> quando o recurso filho não existe fora do pai (item só existe dentro de um pedido). A partir daí, se o recurso tem identidade própria e pode ser acessado/referenciado sozinho, trata como recurso de primeiro nível e relaciona via campo no body ou query string, não aninhamento.</p>
+
+  <h2 id="acoes-que-nao-sao-crud">5. Ações que não são CRUD puro</h2>
+  <p>Nem tudo é criar/ler/atualizar/deletar um registro. Coisas como "cancelar pedido", "fazer login", "reenviar e-mail de confirmação" são ações de negócio, não um CRUD direto sobre um campo.</p>
+  <p>Convenção de mercado predominante: modela como um <strong>sub-recurso no plural, verbo no infinitivo, ou substantivo que representa a ação como "coisa"</strong>, sempre via <code>POST</code>:</p>
+  <pre><code>POST /pedidos/501/cancelamento   &lt;- cria "o cancelamento" como recurso
+POST /sessoes                    &lt;- login = criar uma sessão
+DELETE /sessoes/atual            &lt;- logout = remover a sessão
+
+&lt;- variação mais pragmática, muito comum na prática:
+POST /pedidos/501/cancelar
+POST /pedidos/501/reenviar-confirmacao</code></pre>
+  <div class="callout"><p>Não existe consenso 100% "puro" aqui — mesmo APIs bem desenhadas de mercado misturam os dois estilos. O importante é: continua sendo <code>POST</code> (não é seguro, não é idempotente por padrão), e o nome da URI ainda descreve uma <em>coisa</em> (o cancelamento, a sessão) ou pelo menos um verbo claro, não uma chamada de função genérica tipo <code>/processar</code>.</p></div>
+
+  <h2 id="filtros-busca">6. Filtros e busca</h2>
+  <p>Filtro não é recurso novo — é <strong>query string</strong> em cima da coleção:</p>
+  <pre><code>GET /pedidos?status=pago
+GET /pedidos?status=pago&cliente_id=42
+GET /pedidos?criado_apos=2026-01-01</code></pre>
+  <p>Erro comum: criar endpoint separado pra cada combinação de filtro (<code>/pedidos-pagos</code>, <code>/pedidos-por-cliente/42</code>). Isso multiplica endpoints à toa — o recurso continua sendo "pedidos", o filtro é só um parâmetro de consulta sobre a mesma coleção.</p>
+
+  <h2 id="paginacao">7. Paginação</h2>
+  <p>Coleção grande nunca deveria voltar inteira numa resposta só. Dois estilos comuns:</p>
+  <h3>Offset/limit (mais simples, mais comum em APIs pequenas/médias)</h3>
+  <pre><code>GET /pedidos?offset=40&limit=20
+
+{
+  "dados": [ ... 20 pedidos ... ],
+  "total": 187,
+  "offset": 40,
+  "limit": 20
+}</code></pre>
+  <p>Simples de implementar, mas degrada em tabelas muito grandes (banco ainda precisa "pular" as linhas anteriores) e pode duplicar/pular itens se dados forem inseridos/removidos entre uma página e outra.</p>
+  <h3>Cursor-based (mais robusto, comum em APIs de alto volume)</h3>
+  <pre><code>GET /pedidos?limit=20&cursor=eyJpZCI6NTIwfQ
+
+{
+  "dados": [ ... 20 pedidos ... ],
+  "proximo_cursor": "eyJpZCI6NTQwfQ"
+}</code></pre>
+  <p>Cursor é um ponteiro opaco pra "onde parei" (geralmente baseado no último ID/timestamp visto), não um número de posição. Evita os problemas de offset em dados que mudam constantemente. Custo: não dá pra "pular direto pra página 8" como no offset.</p>
+
+  <h2 id="ordenacao">8. Ordenação</h2>
+  <p>Também via query string, convenção comum usando prefixo <code>-</code> pra ordem decrescente:</p>
+  <pre><code>GET /pedidos?sort=criado_em        &lt;- crescente
+GET /pedidos?sort=-criado_em       &lt;- decrescente
+GET /pedidos?sort=status,-total    &lt;- múltiplos critérios</code></pre>
+
+  <h2 id="erros-comuns">9. Erros conceituais comuns</h2>
+  <ol>
+    <li><strong>"URI precisa refletir a estrutura do banco de dados"</strong> — Não. URI reflete o modelo do <em>domínio</em> exposto pra fora, não as tabelas internas. Podem (e costumam) ser diferentes.</li>
+    <li><strong>"Todo filtro precisa virar rota nova"</strong> — Não, ver seção 6. Query string existe exatamente pra isso.</li>
+    <li><strong>"Verbo no nome do endpoint deixa mais claro"</strong> — Geralmente o oposto: se o verbo HTTP já diz a ação, repetir na URI (<code>/getPedidos</code>) é sinal de design RPC, não REST (ver seção 1 e Nível 2 vs Nível 0 da parte 1).</li>
+    <li><strong>"Singular ou plural, tanto faz"</strong> — Tecnicamente funciona dos dois jeitos, mas misturar (<code>/pedido</code> aqui, <code>/produtos</code> ali) quebra previsibilidade. Escolher plural sempre e manter consistente é a convenção dominante de mercado.</li>
+  </ol>
+
+  <h2 id="proximos-passos">10. O que vem a seguir</h2>
+  <p>Este documento cobriu como desenhar o "vocabulário" da API. A partir daqui a trilha sai da teoria/convenção e vai pra prática de construção:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Escolha de stack</strong>: qual linguagem/framework vamos usar pra construir (reaproveitar JavaScript no back-end via Node.js está em aberto).</li>
+      <li><strong>Primeira API funcional</strong>: colocar a mão na massa.</li>
+      <li><strong>Autenticação e autorização</strong> (JWT, API keys, OAuth — visão geral).</li>
+      <li><strong>Boas práticas de produção</strong>: versionamento, tratamento de erros, validação, documentação (OpenAPI/Swagger).</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Quando terminar de ler este arquivo, volte com suas dúvidas. Perguntas do tipo "quando vale a pena aninhar 2 níveis?" ou "por que cursor é melhor que offset em produção?" são o tipo de coisa que vale esclarecer antes de escolher a stack e começar a codar.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

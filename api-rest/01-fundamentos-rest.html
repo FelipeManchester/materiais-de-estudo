@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fundamentos de API REST</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-alt: #f6f7f9;
+    --text: #1c1e21;
+    --text-muted: #5a5f66;
+    --border: #e2e4e8;
+    --accent: #2f6feb;
+    --accent-soft: #eaf1fd;
+    --code-bg: #f0f1f3;
+    --quote-bg: #fbf6e9;
+    --quote-border: #d9b53c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --bg-alt: #1c1f24;
+      --text: #e6e8eb;
+      --text-muted: #9aa0a8;
+      --border: #2b2f36;
+      --accent: #6ea8ff;
+      --accent-soft: #1b2636;
+      --code-bg: #21242a;
+      --quote-bg: #23201a;
+      --quote-border: #b8922e;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.7;
+  }
+  .layout {
+    display: flex;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  nav.toc {
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    width: 260px;
+    flex-shrink: 0;
+    padding: 2.5rem 1.25rem 2rem 1.5rem;
+    height: 100vh;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+  }
+  nav.toc h2 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin: 0 0 0.75rem;
+  }
+  nav.toc ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-size: 0.9rem;
+  }
+  nav.toc li { margin-bottom: 0.55rem; }
+  nav.toc a {
+    color: var(--text-muted);
+    text-decoration: none;
+  }
+  nav.toc a:hover { color: var(--accent); }
+  .toc-prev, .toc-next {
+    display: block;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-decoration: none;
+  }
+  .toc-prev {
+    margin-bottom: 1.75rem;
+    padding-bottom: 1.25rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .toc-next {
+    margin-top: 1.75rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--border);
+    text-align: right;
+  }
+  .toc-prev:hover, .toc-next:hover { color: var(--accent); }
+  main {
+    flex: 1;
+    min-width: 0;
+    padding: 2.5rem 3rem 6rem;
+  }
+  .eyebrow {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+  h1 {
+    font-size: 2.1rem;
+    margin: 0 0 0.75rem;
+    line-height: 1.25;
+  }
+  .subtitle {
+    color: var(--text-muted);
+    font-size: 1.02rem;
+    max-width: 60ch;
+    margin-bottom: 2.5rem;
+  }
+  h2 {
+    font-size: 1.4rem;
+    margin: 3rem 0 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 1.12rem;
+    margin: 2rem 0 0.75rem;
+    color: var(--text);
+  }
+  p { margin: 0 0 1rem; max-width: 78ch; }
+  ul, ol { max-width: 78ch; padding-left: 1.4rem; }
+  li { margin-bottom: 0.4rem; }
+  strong { color: var(--text); }
+  em { color: var(--text-muted); }
+  code {
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+  }
+  blockquote {
+    margin: 1.5rem 0;
+    padding: 0.9rem 1.25rem;
+    background: var(--quote-bg);
+    border-left: 3px solid var(--quote-border);
+    border-radius: 0 6px 6px 0;
+    max-width: 74ch;
+  }
+  blockquote p:last-child { margin-bottom: 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1.5rem 0;
+    font-size: 0.92rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.65rem 0.9rem;
+    border: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: var(--bg-alt);
+    font-weight: 600;
+  }
+  tr:nth-child(even) td { background: var(--bg-alt); }
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2.5rem 0;
+  }
+  .callout {
+    background: var(--accent-soft);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin: 1.5rem 0;
+    max-width: 74ch;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+  .next-steps {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem 1.75rem;
+    margin-top: 1.5rem;
+  }
+  .next-steps ol { padding-left: 1.2rem; }
+  footer.closing {
+    margin-top: 2rem;
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    max-width: 74ch;
+  }
+  @media (max-width: 900px) {
+    nav.toc { display: none; }
+    main { padding: 2rem 1.25rem 4rem; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav class="toc">
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-que-e-api">1. O que é uma API</a></li>
+    <li><a href="#contexto-historico">2. Contexto histórico</a></li>
+    <li><a href="#problema-resolvido">3. Problema que o REST resolve</a></li>
+    <li><a href="#restricoes">4. As 6 restrições do REST</a></li>
+    <li><a href="#rest-vs-outros">5. REST vs. outros estilos</a></li>
+    <li><a href="#richardson">6. Richardson Maturity Model</a></li>
+    <li><a href="#conceitos-chave">7. Conceitos-chave</a></li>
+    <li><a href="#erros-comuns">8. Erros conceituais comuns</a></li>
+    <li><a href="#proximos-passos">9. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="02-http-na-pratica.html">2. HTTP na prática &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Material de estudo — API REST — Parte 1</div>
+  <h1>Fundamentos de API REST</h1>
+  <p class="subtitle">Teoria e contexto histórico. Antes de escrever uma linha de código, o objetivo aqui é você entender <strong>o problema que REST resolve</strong>, <strong>de onde ele veio</strong> e <strong>como pensar em termos de recursos</strong>. Isso muda completamente como você desenha uma API depois.</p>
+
+  <h2 id="o-que-e-api">1. O que é uma API, antes de falar de REST</h2>
+  <p>API (<em>Application Programming Interface</em>) é um contrato: um conjunto de regras que permite que dois sistemas de software conversem entre si sem que um precise conhecer os detalhes internos do outro.</p>
+  <p>Você já consome APIs há tempos no front-end: quando faz <code>fetch('/api/users')</code>, está seguindo um contrato que alguém definiu no back-end. A pergunta que este material responde é: <strong>quem define esse contrato, e por quê da forma que é definido?</strong></p>
+  <p>REST é <strong>um estilo de arquitetura para desenhar esse contrato quando a comunicação acontece pela web, usando HTTP</strong>. Não é um protocolo, não é uma biblioteca, não é um framework. É um conjunto de restrições (<em>constraints</em>) que, se seguidas, trazem propriedades desejáveis ao sistema (escalabilidade, simplicidade, independência entre cliente e servidor).</p>
+
+  <h2 id="contexto-historico">2. Contexto histórico: de onde veio o REST</h2>
+
+  <h3>2.1 O problema em 1999-2000</h3>
+  <p>No fim dos anos 90, a web já era grande, mas ainda era usada majoritariamente para servir páginas HTML estáticas ou geradas no servidor (CGI, ASP). Ao mesmo tempo, a indústria de software corporativo (Microsoft, IBM, etc.) estava empurrando <strong>SOAP</strong> (<em>Simple Object Access Protocol</em>) e arquiteturas RPC (<em>Remote Procedure Call</em>) como forma de fazer sistemas distribuídos conversarem — geralmente com XML pesado, contratos rígidos (WSDL) e muita complexidade de infraestrutura.</p>
+  <p>Havia uma pergunta em aberto: <strong>a própria arquitetura da web (HTTP, URIs, hipertexto) já não era, por si só, um jeito eficiente de construir sistemas distribuídos em larga escala?</strong> Afinal, a web já escalava para milhões de usuários todos os dias.</p>
+
+  <h3>2.2 Roy Fielding e a tese de doutorado</h3>
+  <p>Em <strong>2000</strong>, <strong>Roy Fielding</strong> publicou sua tese de doutorado na UC Irvine, intitulada:</p>
+  <blockquote><p><em>"Architectural Styles and the Design of Network-based Software Architectures"</em></p></blockquote>
+  <p>Fielding não era um acadêmico qualquer estudando a web de fora: ele foi <strong>um dos autores das especificações HTTP/1.0, HTTP/1.1 e URI</strong>, e cofundador do projeto Apache HTTP Server. Ou seja, ele ajudou a construir a própria infraestrutura que a web usa, e sua tese é, em grande parte, uma explicação retroativa e formalizada de <strong>por que a web funciona tão bem em escala</strong> — e como generalizar esses princípios para desenhar outros sistemas.</p>
+  <p>No <strong>Capítulo 5</strong> dessa tese, ele nomeia esse estilo arquitetural de <strong>REST — Representational State Transfer</strong>.</p>
+  <p>Ponto importante: REST <strong>não foi inventado do zero</strong>. Ele foi <strong>extraído e formalizado</strong> a partir de padrões que já existiam informalmente na arquitetura da web (HTTP, cache de navegador/proxy, URLs, links). Fielding deu nome, formalizou as regras e explicou o "porquê" arquitetural por trás de decisões que já existiam.</p>
+
+  <h3>2.3 O nome "Representational State Transfer"</h3>
+  <p>O nome é estranho à primeira vista, mas faz sentido decomposto:</p>
+  <ul>
+    <li><strong>Resource (Recurso)</strong>: tudo que a API expõe é modelado como um "recurso" — um usuário, um pedido, um produto. Não é uma "função para chamar", é uma "coisa que existe".</li>
+    <li><strong>Representation (Representação)</strong>: o cliente nunca recebe o recurso "de verdade" (o registro cru do banco de dados). Ele recebe uma <strong>representação</strong> desse recurso em um formato (JSON, XML, HTML) em um dado momento.</li>
+    <li><strong>State Transfer (Transferência de estado)</strong>: cada interação transfere o <strong>estado necessário</strong> para o cliente entender ou modificar o recurso, sem que o servidor precise "lembrar" de conversas anteriores (chegamos nisso: <em>statelessness</em>).</li>
+  </ul>
+
+  <h2 id="problema-resolvido">3. Qual problema o REST resolve, na prática</h2>
+  <p>Antes de aceitar as regras do REST, é importante entender <strong>os problemas reais</strong> que essas regras evitam:</p>
+  <table>
+    <thead>
+      <tr><th>Problema</th><th>Como REST resolve</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Cliente e servidor evoluindo juntos demais, cada mudança em um quebra o outro</td><td><strong>Separação Cliente-Servidor</strong>: contrato é a interface (URIs + HTTP + formato), não a implementação interna</td></tr>
+      <tr><td>Servidor não escala porque guarda sessão/estado de cada cliente em memória</td><td><strong>Stateless</strong>: cada requisição carrega tudo que o servidor precisa saber; servidor não guarda "conversa"</td></tr>
+      <tr><td>Toda requisição repetida bate no banco de novo</td><td><strong>Cacheable</strong>: respostas podem se declarar cacheáveis, evitando processamento redundante</td></tr>
+      <tr><td>Cada API tem verbos/nomes de ação diferentes (<code>getUser</code>, <code>fetchUser</code>, <code>retrieveUserById</code>...)</td><td><strong>Uniform Interface</strong>: mesmo vocabulário sempre — GET, POST, PUT, DELETE sobre recursos identificados por URI</td></tr>
+      <tr><td>Sistemas gigantes de proxies, gateways e balanceadores não conseguem inspecionar/otimizar tráfego</td><td><strong>Layered System</strong>: camadas intermediárias (proxy, cache, gateway, load balancer) podem existir de forma transparente porque a interface é uniforme e sem estado</td></tr>
+    </tbody>
+  </table>
+  <p>O fio condutor: <strong>tudo isso já eram problemas resolvidos pela própria arquitetura da web</strong> (HTTP + URI + cache de navegador). REST é basicamente dizer: "pare de reinventar RPC customizado, use os mecanismos que a web já oferece."</p>
+
+  <h2 id="restricoes">4. As 6 restrições arquiteturais do REST</h2>
+  <p>Isso é o núcleo técnico da tese de Fielding. Uma API só é "verdadeiramente RESTful" se seguir estas restrições (as 5 primeiras são obrigatórias, a 6ª é opcional):</p>
+
+  <h3>4.1 Client-Server (Cliente-Servidor)</h3>
+  <p>Separação de responsabilidades. Cliente cuida de interface/experiência do usuário. Servidor cuida de dados/lógica de negócio/armazenamento. Um pode evoluir sem o outro, desde que o contrato (a interface) não mude.</p>
+  <div class="callout"><p>Isso já é natural pra você: seu front-end em React não sabe (nem precisa saber) se o back-end é Node, Python ou Java.</p></div>
+
+  <h3>4.2 Stateless (Sem estado)</h3>
+  <p><strong>Esta é a restrição mais mal-entendida e mais importante.</strong></p>
+  <p>Cada requisição do cliente para o servidor deve conter <strong>toda a informação necessária</strong> para o servidor entendê-la e processá-la. O servidor <strong>não guarda contexto de sessão do cliente entre requisições</strong>.</p>
+  <p>Isso não significa "a aplicação não tem estado" (um carrinho de compras claramente tem estado). Significa que <strong>esse estado vive no cliente ou em um armazenamento explícito (banco/cache), e é enviado a cada requisição</strong> (via token, parâmetros, headers) — o servidor não mantém uma "memória de conversa" atrelada a uma conexão específica.</p>
+  <p>Por que isso importa: um servidor stateless pode responder a requisição de qualquer instância de um cluster, sem precisar que seja "a mesma instância que atendeu a última vez". Isso é o que permite escalar horizontalmente (adicionar mais servidores) com facilidade.</p>
+
+  <h3>4.3 Cacheable (Cacheável)</h3>
+  <p>Toda resposta deve, implícita ou explicitamente, se rotular como cacheável ou não (headers como <code>Cache-Control</code>, <code>ETag</code>). Isso permite que clientes e intermediários evitem refazer requisições desnecessárias, melhorando performance e reduzindo carga no servidor.</p>
+
+  <h3>4.4 Uniform Interface (Interface Uniforme)</h3>
+  <p>A restrição que mais define "a cara" de uma API REST. Se divide em 4 sub-princípios:</p>
+  <ol>
+    <li><strong>Identificação de recursos via URI</strong>: <code>/users/42</code> identifica <em>o usuário 42</em>, não "a função que busca usuário".</li>
+    <li><strong>Manipulação de recursos através de representações</strong>: você não manda "delete o usuário", você envia uma requisição <code>DELETE</code> para a representação do recurso <code>/users/42</code>.</li>
+    <li><strong>Mensagens auto-descritivas</strong>: a requisição/resposta carrega informação suficiente para ser entendida sozinha (método HTTP, <code>Content-Type</code>, códigos de status).</li>
+    <li><strong>HATEOAS</strong> (<em>Hypermedia as the Engine of Application State</em>): a resposta deveria conter links para as próximas ações possíveis, assim como uma página HTML tem links. <strong>Esse é o princípio menos seguido na prática pela indústria</strong> — a maioria das "APIs REST" do mundo real ignora HATEOAS (falamos disso na seção 6).</li>
+  </ol>
+
+  <h3>4.5 Layered System (Sistema em Camadas)</h3>
+  <p>O cliente não precisa saber se está falando diretamente com o servidor final, ou com um proxy, gateway de API, load balancer, ou camada de cache no meio do caminho. Cada camada só enxerga a camada imediatamente adjacente.</p>
+
+  <h3>4.6 Code on Demand (opcional)</h3>
+  <p>O servidor pode estender a funcionalidade do cliente enviando código executável (ex: JavaScript). É a única restrição opcional — e ironicamente é o que o seu navegador faz o tempo todo ao carregar JS de uma página. Raramente é discutida no contexto de "APIs REST" de back-end porque normalmente falamos de APIs que retornam dados (JSON), não código.</p>
+
+  <h2 id="rest-vs-outros">5. REST vs. outros estilos (contexto pra você situar)</h2>
+  <table>
+    <thead>
+      <tr><th>Estilo</th><th>Ideia central</th><th>Quando você provavelmente já viu</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>SOAP</strong></td><td>Protocolo rígido, baseado em XML, com contrato formal (WSDL), geralmente sobre HTTP mas não depende de seus verbos</td><td>Sistemas corporativos/bancários legados</td></tr>
+      <tr><td><strong>RPC / JSON-RPC / gRPC</strong></td><td>Cliente chama uma "função remota" diretamente (<code>createUser()</code>, <code>deleteOrder()</code>) — modela <strong>ações</strong>, não recursos</td><td>gRPC é comum em comunicação interna entre microsserviços (alta performance, contratos via Protobuf)</td></tr>
+      <tr><td><strong>GraphQL</strong></td><td>Cliente descreve exatamente quais dados quer em uma única query, servidor resolve</td><td>Você provavelmente já consumiu — ex. várias APIs modernas expõem GraphQL</td></tr>
+      <tr><td><strong>REST</strong></td><td>Modela o mundo como <strong>recursos</strong> manipulados por um <strong>verbo HTTP uniforme</strong></td><td>A grande maioria das APIs públicas do mercado ("REST" no sentido amplo, nem sempre no sentido estrito de Fielding)</td></tr>
+    </tbody>
+  </table>
+  <p>Ponto importante que vamos aprofundar mais pra frente: <strong>a maioria das APIs que o mercado chama de "REST" hoje não são 100% RESTful</strong> no sentido estrito da tese (particularmente por ignorarem HATEOAS). Isso é tão comum que existe um modelo pra classificar "o quão RESTful" uma API realmente é — é o assunto da próxima seção.</p>
+
+  <h2 id="richardson">6. Richardson Maturity Model (Modelo de Maturidade de Richardson)</h2>
+  <p>Criado por <strong>Leonard Richardson</strong> (não confundir com Fielding), esse modelo classifica APIs em 4 níveis de "quão REST" elas realmente são:</p>
+  <ul>
+    <li><strong>Nível 0 — The Swamp of POX</strong> ("o pântano de XML puro"): um único endpoint, um único método HTTP (geralmente <code>POST</code>), tudo resolvido pelo corpo da requisição. É basicamente RPC disfarçado de HTTP. Ex: tudo passa por <code>POST /api</code> com um campo <code>"action": "getUser"</code> no corpo.</li>
+    <li><strong>Nível 1 — Recursos</strong>: introduz múltiplos endpoints, um por recurso (<code>/users</code>, <code>/orders</code>), mas ainda usando só um método HTTP pra tudo.</li>
+    <li><strong>Nível 2 — Verbos HTTP</strong>: usa os métodos HTTP corretamente (<code>GET</code>, <code>POST</code>, <code>PUT</code>, <code>DELETE</code>) com o significado semântico correto, e os códigos de status HTTP corretos. <strong>Isso é onde a esmagadora maioria das "APIs REST" do mundo real está — inclusive a que você provavelmente vai construir primeiro.</strong></li>
+    <li><strong>Nível 3 — HATEOAS</strong>: respostas incluem links de navegação para os próximos estados/ações possíveis, exatamente como uma página HTML tem links <code>&lt;a&gt;</code>. Muito raro na prática fora de exemplos acadêmicos e alguns poucos casos (ex: PayPal API, algumas APIs bancárias).</li>
+  </ul>
+  <div class="callout"><p><strong>Por que isso importa pra você agora</strong>: não se cobre para chegar no Nível 3 logo de cara. O mercado, majoritariamente, opera e considera "aceitável" uma API que está no <strong>Nível 2</strong>. Nosso objetivo prático quando formos codar será atingir um bom Nível 2 — bem desenhado — antes de sequer considerar HATEOAS.</p></div>
+
+  <h2 id="conceitos-chave">7. Conceitos-chave que vamos usar o tempo todo</h2>
+  <p>Só pra fixar vocabulário antes da parte de código:</p>
+  <ul>
+    <li><strong>Recurso</strong>: a "coisa" que a API expõe (ex: um usuário, um post, um pedido). Geralmente representa uma entidade ou coleção.</li>
+    <li><strong>Coleção vs. item único</strong>: <code>/users</code> (coleção de usuários) vs <code>/users/42</code> (um usuário específico).</li>
+    <li><strong>Representação</strong>: o formato em que o recurso é entregue — quase sempre JSON hoje em dia.</li>
+    <li><strong>Verbo HTTP (Método)</strong>: <code>GET</code>, <code>POST</code>, <code>PUT</code>, <code>PATCH</code>, <code>DELETE</code> — cada um com significado semântico específico (próximo material vai detalhar cada um).</li>
+    <li><strong>Código de status HTTP</strong>: número que indica o resultado da requisição (<code>200</code>, <code>201</code>, <code>404</code>, <code>500</code>...).</li>
+    <li><strong>Idempotência</strong>: uma operação é idempotente se fazer ela 1 vez ou 100 vezes seguidas produz o mesmo resultado final no servidor. (<code>GET</code>, <code>PUT</code>, <code>DELETE</code> deveriam ser idempotentes; <code>POST</code> normalmente não é.) Conceito crítico pra desenhar bem uma API — vamos voltar nisso.</li>
+    <li><strong>Statelessness</strong> (já visto acima): servidor não guarda estado de sessão do cliente entre requisições.</li>
+  </ul>
+
+  <h2 id="erros-comuns">8. Erros conceituais comuns (pra você já sair evitando)</h2>
+  <ol>
+    <li><strong>"REST = JSON sobre HTTP"</strong> — Não. Dá pra fazer REST com XML, e dá pra fazer HTTP sem ser REST (SOAP roda sobre HTTP). REST é sobre a arquitetura/restrições, não sobre o formato de dado.</li>
+    <li><strong>"Toda API que usa GET/POST/PUT/DELETE é REST"</strong> — Tecnicamente é REST "nível 2", não REST completo (falta HATEOAS pra ser Nível 3), mas na prática do mercado isso é aceito como "API REST". O importante é você saber a diferença e não se confundir quando ler material mais purista.</li>
+    <li><strong>"REST é um protocolo"</strong> — Não. HTTP é o protocolo. REST é um <strong>estilo arquitetural</strong> que normalmente é implementado usando HTTP.</li>
+    <li><strong>"Stateless significa que a aplicação não pode ter estado (ex: carrinho de compras, sessão de usuário)"</strong> — Não. Significa que esse estado não fica "preso" na memória de uma instância específica do servidor entre requisições; ele é persistido (banco, token, cache) e enviado quando necessário.</li>
+  </ol>
+
+  <h2 id="proximos-passos">9. O que vem a seguir</h2>
+  <p>Este documento cobriu <strong>teoria, história e princípios</strong>. Os próximos materiais (que vamos criar conforme avançamos) vão cobrir, nesta ordem:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>HTTP na prática</strong>: métodos, códigos de status, headers relevantes, o ciclo requisição/resposta.</li>
+      <li><strong>Design de recursos e URIs</strong>: como nomear endpoints bem, convenções de mercado, aninhamento de recursos, filtros/paginação/ordenação.</li>
+      <li><strong>Escolha de stack</strong>: qual linguagem/framework vamos usar pra construir (a decisão de reaproveitar seu conhecimento de JavaScript no back-end via Node.js está em aberto).</li>
+      <li><strong>Primeira API funcional</strong>: colocar a mão na massa.</li>
+      <li><strong>Autenticação e autorização</strong> (JWT, API keys, OAuth — visão geral).</li>
+      <li><strong>Boas práticas de produção</strong>: versionamento, tratamento de erros, validação, documentação (OpenAPI/Swagger).</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Quando terminar de ler este arquivo, volte com suas dúvidas. Perguntas do tipo "por que idempotência importa pra DELETE?" ou "por que servidor não pode guardar estado?" são exatamente o tipo de coisa que vale a pena esclarecer antes de ir pro código.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

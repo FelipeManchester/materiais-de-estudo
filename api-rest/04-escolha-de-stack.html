@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Escolha de stack para a API</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-alt: #f6f7f9;
+    --text: #1c1e21;
+    --text-muted: #5a5f66;
+    --border: #e2e4e8;
+    --accent: #2f6feb;
+    --accent-soft: #eaf1fd;
+    --code-bg: #f0f1f3;
+    --quote-bg: #fbf6e9;
+    --quote-border: #d9b53c;
+    --ok: #1a7f37;
+    --ok-soft: #e7f6ec;
+    --warn: #9a6700;
+    --warn-soft: #fff3d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --bg-alt: #1c1f24;
+      --text: #e6e8eb;
+      --text-muted: #9aa0a8;
+      --border: #2b2f36;
+      --accent: #6ea8ff;
+      --accent-soft: #1b2636;
+      --code-bg: #21242a;
+      --quote-bg: #23201a;
+      --quote-border: #b8922e;
+      --ok: #56d364;
+      --ok-soft: #17281c;
+      --warn: #e3b341;
+      --warn-soft: #2b2312;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.7;
+  }
+  .layout {
+    display: flex;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  nav.toc {
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    width: 260px;
+    flex-shrink: 0;
+    padding: 2.5rem 1.25rem 2rem 1.5rem;
+    height: 100vh;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+  }
+  nav.toc h2 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin: 0 0 0.75rem;
+  }
+  nav.toc ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-size: 0.9rem;
+  }
+  nav.toc li { margin-bottom: 0.55rem; }
+  nav.toc a {
+    color: var(--text-muted);
+    text-decoration: none;
+  }
+  nav.toc a:hover { color: var(--accent); }
+  .toc-prev, .toc-next {
+    display: block;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-decoration: none;
+  }
+  .toc-prev {
+    margin-bottom: 1.75rem;
+    padding-bottom: 1.25rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .toc-next {
+    margin-top: 1.75rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--border);
+    text-align: right;
+  }
+  .toc-prev:hover, .toc-next:hover { color: var(--accent); }
+  main {
+    flex: 1;
+    min-width: 0;
+    padding: 2.5rem 3rem 6rem;
+  }
+  .eyebrow {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+  h1 {
+    font-size: 2.1rem;
+    margin: 0 0 0.75rem;
+    line-height: 1.25;
+  }
+  .subtitle {
+    color: var(--text-muted);
+    font-size: 1.02rem;
+    max-width: 60ch;
+    margin-bottom: 2.5rem;
+  }
+  h2 {
+    font-size: 1.4rem;
+    margin: 3rem 0 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 1.12rem;
+    margin: 2rem 0 0.75rem;
+    color: var(--text);
+  }
+  p { margin: 0 0 1rem; max-width: 78ch; }
+  ul, ol { max-width: 78ch; padding-left: 1.4rem; }
+  li { margin-bottom: 0.4rem; }
+  strong { color: var(--text); }
+  em { color: var(--text-muted); }
+  code {
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem 1.25rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    max-width: 78ch;
+    margin: 1.25rem 0;
+    border: 1px solid var(--border);
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    font-size: 0.85rem;
+    line-height: 1.6;
+  }
+  blockquote {
+    margin: 1.5rem 0;
+    padding: 0.9rem 1.25rem;
+    background: var(--quote-bg);
+    border-left: 3px solid var(--quote-border);
+    border-radius: 0 6px 6px 0;
+    max-width: 74ch;
+  }
+  blockquote p:last-child { margin-bottom: 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1.5rem 0;
+    font-size: 0.92rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.65rem 0.9rem;
+    border: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: var(--bg-alt);
+    font-weight: 600;
+  }
+  tr:nth-child(even) td { background: var(--bg-alt); }
+  .badge {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 999px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+  }
+  .badge-ok { background: var(--ok-soft); color: var(--ok); }
+  .badge-warn { background: var(--warn-soft); color: var(--warn); }
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2.5rem 0;
+  }
+  .callout {
+    background: var(--accent-soft);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin: 1.5rem 0;
+    max-width: 74ch;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+  .stack-card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    margin: 1.25rem 0;
+  }
+  .stack-card h3 { margin-top: 0; }
+  .stack-card .meta {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+  }
+  .next-steps {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem 1.75rem;
+    margin-top: 1.5rem;
+  }
+  .next-steps ol { padding-left: 1.2rem; }
+  footer.closing {
+    margin-top: 2rem;
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    max-width: 74ch;
+  }
+  @media (max-width: 900px) {
+    nav.toc { display: none; }
+    main { padding: 2rem 1.25rem 4rem; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav class="toc">
+  <a class="toc-prev" href="03-design-de-recursos-e-uris.html">&larr; 3. Design de recursos e URIs</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#criterios">1. Critérios pra decidir</a></li>
+    <li><a href="#nodejs">2. Node.js</a></li>
+    <li><a href="#python">3. Python</a></li>
+    <li><a href="#java">4. Java</a></li>
+    <li><a href="#dotnet">5. C# / .NET</a></li>
+    <li><a href="#go">6. Go</a></li>
+    <li><a href="#outras">7. Outras stacks (menção rápida)</a></li>
+    <li><a href="#comparativo">8. Comparativo direto</a></li>
+    <li><a href="#recomendacao">9. Pensando no seu caso</a></li>
+    <li><a href="#erros-comuns">10. Erros conceituais comuns</a></li>
+    <li><a href="#proximos-passos">11. O que vem a seguir</a></li>
+  </ol>
+</nav>
+
+<main>
+  <div class="eyebrow">Material de estudo — API REST — Parte 4</div>
+  <h1>Escolha de stack para a API</h1>
+  <p class="subtitle">Partes 1-3 cobriram teoria, protocolo e design de URIs — isso vale pra <strong>qualquer</strong> linguagem/framework. Agora a pergunta prática: com o que construir a primeira API de verdade? Esse material não decide por você — apresenta as opções mais usadas de mercado, as diferenças reais entre elas, pra você decidir com contexto.</p>
+
+  <h2 id="criterios">1. Critérios pra decidir</h2>
+  <p>Antes de comparar stacks, vale fixar em que eixos elas realmente diferem — é isso que importa, não "qual é melhor" (pergunta sem resposta única):</p>
+  <ul>
+    <li><strong>Curva de aprendizado a partir de onde você está</strong>: você já sabe JavaScript (front-end/React). Isso pesa bastante — reaproveitar linguagem é reaproveitar sintaxe, forma de pensar assíncrono, e até bibliotecas de validação/teste conhecidas.</li>
+    <li><strong>Ecossistema e maturidade</strong>: quantidade de bibliotecas prontas, documentação, quantidade de gente usando (afeta quão fácil é achar resposta pra um problema específico).</li>
+    <li><strong>Performance/concorrência</strong>: importa mais em sistemas de alto tráfego do que numa primeira API de estudo — mas vale entender a diferença.</li>
+    <li><strong>Oportunidade de mercado</strong>: se o objetivo também é emprego/freelance, vale olhar o que mais aparece em vagas na sua região/área de interesse.</li>
+    <li><strong>Opinativo vs. flexível</strong>: frameworks "com opinião forte" (ex: Rails, NestJS, Django) já vêm com estrutura de pastas, convenções e decisões tomadas — mais rápido pra começar, menos liberdade. Frameworks minimalistas (ex: Express, Flask) te dão um esqueleto pequeno e você monta o resto — mais liberdade, mais decisão em cima de você.</li>
+  </ul>
+
+  <h2 id="nodejs">2. Node.js</h2>
+  <p><strong>JavaScript/TypeScript rodando no servidor.</strong> Maior vantagem pro seu caso específico: é a mesma linguagem do seu front-end. JSON é o formato nativo (literalmente <em>JavaScript</em> Object Notation) — serializar/desserializar dado é natural, sem fricção.</p>
+
+  <div class="stack-card">
+    <h3>Express</h3>
+    <div class="meta">Minimalista &middot; o mais usado historicamente em Node.js</div>
+    <p>Framework "esqueleto": rotas, middlewares, e pouco mais. Você decide estrutura de pastas, como organizar validação, como lidar com erros. Ótimo pra aprender os fundamentos porque nada fica escondido por "mágica" do framework — mas em projeto grande, a falta de estrutura padrão vira responsabilidade sua (ou gera inconsistência no time).</p>
+  </div>
+
+  <div class="stack-card">
+    <h3>Fastify</h3>
+    <div class="meta">Minimalista &middot; focado em performance</div>
+    <p>Proposta parecida com Express (rotas + middlewares/plugins), mas desenhado desde o início pra ser mais rápido e com validação de schema (JSON Schema) integrada nativamente. Ecossistema menor que Express, mas crescendo bastante.</p>
+  </div>
+
+  <div class="stack-card">
+    <h3>NestJS</h3>
+    <div class="meta">Opinativo &middot; inspirado em Angular (decorators, injeção de dependência)</div>
+    <p>Framework completo: estrutura de módulos/controllers/services já definida, TypeScript como padrão (não opcional), injeção de dependência, muito próximo do que Java/Spring ou Angular fazem. Curva de aprendizado maior que Express, mas escala melhor em times grandes/projetos grandes por já impor organização.</p>
+  </div>
+
+  <h2 id="python">3. Python</h2>
+  <p>Linguagem com sintaxe simples, comunidade enorme (puxada também por data science/IA, o que ajuda em bibliotecas de suporte).</p>
+
+  <div class="stack-card">
+    <h3>FastAPI</h3>
+    <div class="meta">Moderno &middot; cresceu muito nos últimos anos</div>
+    <p>Baseado em type hints do Python pra gerar validação automática e documentação OpenAPI/Swagger de graça (você vai ver OpenAPI na parte de boas práticas de produção, mais pra frente na trilha). Assíncrono nativo, performance bem acima do Flask/Django tradicional. Hoje é provavelmente a escolha mais recomendada pra API nova em Python.</p>
+  </div>
+
+  <div class="stack-card">
+    <h3>Django + Django REST Framework (DRF)</h3>
+    <div class="meta">Opinativo &middot; "bateria inclusa"</div>
+    <p>Django é um framework full-stack maduro (ORM, admin painel pronto, autenticação embutida); DRF é a camada por cima pra expor tudo isso como API REST. Muito usado em produtos com back-office/admin robusto. Curva de aprendizado maior, mas resolve muita coisa "de fábrica".</p>
+  </div>
+
+  <div class="stack-card">
+    <h3>Flask</h3>
+    <div class="meta">Minimalista</div>
+    <p>Equivalente Python do Express — esqueleto pequeno, você monta o resto. Mais simples de começar que Django, mas hoje em dia FastAPI tomou boa parte do espaço de "Flask pra APIs novas" por já vir com validação e docs automáticas.</p>
+  </div>
+
+  <h2 id="java">4. Java</h2>
+  <div class="stack-card">
+    <h3>Spring Boot</h3>
+    <div class="meta">Opinativo &middot; padrão de facto em Java corporativo</div>
+    <p>Ecossistema gigante, muito usado em bancos, seguradoras, empresas grandes. Injeção de dependência, forte tipagem, muita convenção. Curva de aprendizado mais alta que as opções acima (mais verbosidade, mais conceitos: beans, annotations, configuração), mas domina vagas de "backend Java" no mercado corporativo tradicional.</p>
+  </div>
+
+  <h2 id="dotnet">5. C# / .NET</h2>
+  <div class="stack-card">
+    <h3>ASP.NET Core</h3>
+    <div class="meta">Opinativo, mas flexível &middot; forte em empresas que já usam stack Microsoft</div>
+    <p>Performance muito boa, tooling excelente (Visual Studio), tipagem forte. Historicamente ligado a ambiente Windows, mas hoje roda bem em Linux/containers também. Presença forte em empresas que já têm outras ferramentas Microsoft no ecossistema.</p>
+  </div>
+
+  <h2 id="go">6. Go</h2>
+  <div class="stack-card">
+    <h3>Go (stdlib) / Gin / Fiber</h3>
+    <div class="meta">Minimalista &middot; focado em performance e concorrência</div>
+    <p>Linguagem compilada, feita pela Google pra sistemas de rede/infraestrutura. Excelente performance e baixo consumo de memória, concorrência é parte da linguagem (goroutines). Ecossistema web mais enxuto que Node/Python/Java — você escreve mais coisa "na mão". Muito comum em ferramentas de infraestrutura, microsserviços de alta performance, ambientes cloud-native (Docker, Kubernetes são escritos em Go).</p>
+  </div>
+
+  <h2 id="outras">7. Outras stacks (menção rápida)</h2>
+  <ul>
+    <li><strong>Ruby on Rails</strong>: muito opinativo, produtividade alta pra prototipar rápido. Foi dominante em startups há uma década; hoje menos comum em vaga nova, mas ainda presente em produtos legados relevantes.</li>
+    <li><strong>PHP / Laravel</strong>: PHP tem má fama datada, mas Laravel moderno é um framework robusto e bem produtivo. Base instalada gigantesca (grande parte da web roda PHP), forte em mercado de agências/e-commerce.</li>
+  </ul>
+
+  <h2 id="comparativo">8. Comparativo direto</h2>
+  <table>
+    <thead>
+      <tr><th>Stack</th><th>Curva de aprendizado</th><th>Performance típica</th><th>Uso de mercado</th><th>Ponto forte</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Node.js (Express/Fastify)</td><td><span class="badge badge-ok">baixa</span></td><td>boa</td><td>muito alto</td><td>mesma linguagem do front-end, JSON nativo</td></tr>
+      <tr><td>Node.js (NestJS)</td><td><span class="badge badge-warn">média</span></td><td>boa</td><td>alto, crescendo</td><td>estrutura pronta pra projeto grande</td></tr>
+      <tr><td>Python (FastAPI)</td><td><span class="badge badge-ok">baixa</span></td><td>boa</td><td>alto, crescendo rápido</td><td>validação/documentação automática, tipagem opcional</td></tr>
+      <tr><td>Python (Django+DRF)</td><td><span class="badge badge-warn">média</span></td><td>média</td><td>alto</td><td>"bateria inclusa" (admin, ORM, auth prontos)</td></tr>
+      <tr><td>Java (Spring Boot)</td><td><span class="badge badge-warn">alta</span></td><td>muito boa</td><td>muito alto (corporativo)</td><td>maturidade, robustez, vagas corporativas</td></tr>
+      <tr><td>C# (ASP.NET Core)</td><td><span class="badge badge-warn">média/alta</span></td><td>muito boa</td><td>alto (corporativo)</td><td>tooling, integração com ecossistema Microsoft</td></tr>
+      <tr><td>Go</td><td><span class="badge badge-warn">média</span></td><td>excelente</td><td>alto em infra/cloud</td><td>performance, concorrência nativa, baixo consumo</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="recomendacao">9. Pensando no seu caso</h2>
+  <p>Você vem de front-end com React — já pensa em termos de JavaScript/TypeScript, JSON, async/await, npm. Isso não decide sozinho, mas é um dado real:</p>
+  <div class="callout">
+    <p><strong>Node.js reduz a quantidade de coisa nova de uma vez só.</strong> Você aprende conceitos de API REST/back-end (rotas, banco de dados, autenticação, deploy) sem também precisar aprender uma linguagem nova ao mesmo tempo. Dentro de Node, <strong>Express</strong> é a escolha mais comum pra aprender os fundamentos sem framework escondendo decisões de você — e é o que a maioria dos tutoriais/materiais de mercado assume como base.</p>
+    <p>Isso não invalida as outras opções — Python/FastAPI tem curva de aprendizado igualmente baixa mesmo sendo linguagem nova, e é uma escolha muito forte de mercado hoje. Mas se o objetivo é reduzir atrito e focar no que essa trilha está ensinando (conceitos de API, não sintaxe de linguagem nova), Node.js costuma ser o caminho mais direto a partir de onde você está.</p>
+  </div>
+  <p>Decisão fica com você — quando estiver pronto, é só confirmar a stack que vamos usar na parte 5 (primeira API funcional).</p>
+
+  <h2 id="erros-comuns">10. Erros conceituais comuns</h2>
+  <ol>
+    <li><strong>"A linguagem/framework mais rápido é sempre a melhor escolha"</strong> — Não pra uma primeira API de estudo. Performance de runtime raramente é o gargalo real de um projeto pequeno/médio; velocidade de desenvolvimento e familiaridade importam mais nesse estágio.</li>
+    <li><strong>"Framework opinativo (Nest, Django, Rails) é sempre mais produtivo"</strong> — Só depois que você já entende os fundamentos que ele está escondendo. Aprender REST através de um framework muito opinativo pode confundir o que é "regra do REST" com o que é "convenção do framework".</li>
+    <li><strong>"Preciso escolher a stack 'certa' porque troca depois é difícil"</strong> — Os conceitos das partes 1-3 (recursos, verbos, status codes, URIs) são os mesmos em qualquer stack. Trocar de framework depois é trabalho, mas não é recomeçar do zero — o que você aprendeu até aqui se transfere.</li>
+  </ol>
+
+  <h2 id="proximos-passos">11. O que vem a seguir</h2>
+  <p>Depois de decidida a stack, a trilha continua com:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Primeira API funcional</strong>: colocar a mão na massa.</li>
+      <li><strong>Autenticação e autorização</strong> (JWT, API keys, OAuth — visão geral).</li>
+      <li><strong>Boas práticas de produção</strong>: versionamento, tratamento de erros, validação, documentação (OpenAPI/Swagger).</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Quando terminar de ler este arquivo, volte com sua decisão de stack (ou dúvidas antes de decidir). A parte 5 já assume uma stack escolhida pra montar a primeira API de verdade.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

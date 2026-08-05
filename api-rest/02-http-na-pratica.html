@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HTTP na prática</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-alt: #f6f7f9;
+    --text: #1c1e21;
+    --text-muted: #5a5f66;
+    --border: #e2e4e8;
+    --accent: #2f6feb;
+    --accent-soft: #eaf1fd;
+    --code-bg: #f0f1f3;
+    --quote-bg: #fbf6e9;
+    --quote-border: #d9b53c;
+    --ok: #1a7f37;
+    --ok-soft: #e7f6ec;
+    --warn: #9a6700;
+    --warn-soft: #fff3d6;
+    --err: #cf222e;
+    --err-soft: #ffebe9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --bg-alt: #1c1f24;
+      --text: #e6e8eb;
+      --text-muted: #9aa0a8;
+      --border: #2b2f36;
+      --accent: #6ea8ff;
+      --accent-soft: #1b2636;
+      --code-bg: #21242a;
+      --quote-bg: #23201a;
+      --quote-border: #b8922e;
+      --ok: #56d364;
+      --ok-soft: #17281c;
+      --warn: #e3b341;
+      --warn-soft: #2b2312;
+      --err: #ff7b72;
+      --err-soft: #2b1615;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.7;
+  }
+  .layout {
+    display: flex;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  nav.toc {
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    width: 260px;
+    flex-shrink: 0;
+    padding: 2.5rem 1.25rem 2rem 1.5rem;
+    height: 100vh;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+  }
+  nav.toc h2 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin: 0 0 0.75rem;
+  }
+  nav.toc ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-size: 0.9rem;
+  }
+  nav.toc li { margin-bottom: 0.55rem; }
+  nav.toc a {
+    color: var(--text-muted);
+    text-decoration: none;
+  }
+  nav.toc a:hover { color: var(--accent); }
+  .toc-prev, .toc-next {
+    display: block;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-decoration: none;
+  }
+  .toc-prev {
+    margin-bottom: 1.75rem;
+    padding-bottom: 1.25rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .toc-next {
+    margin-top: 1.75rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--border);
+    text-align: right;
+  }
+  .toc-prev:hover, .toc-next:hover { color: var(--accent); }
+  main {
+    flex: 1;
+    min-width: 0;
+    padding: 2.5rem 3rem 6rem;
+  }
+  .eyebrow {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+  h1 {
+    font-size: 2.1rem;
+    margin: 0 0 0.75rem;
+    line-height: 1.25;
+  }
+  .subtitle {
+    color: var(--text-muted);
+    font-size: 1.02rem;
+    max-width: 60ch;
+    margin-bottom: 2.5rem;
+  }
+  h2 {
+    font-size: 1.4rem;
+    margin: 3rem 0 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 1.12rem;
+    margin: 2rem 0 0.75rem;
+    color: var(--text);
+  }
+  p { margin: 0 0 1rem; max-width: 78ch; }
+  ul, ol { max-width: 78ch; padding-left: 1.4rem; }
+  li { margin-bottom: 0.4rem; }
+  strong { color: var(--text); }
+  em { color: var(--text-muted); }
+  code {
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem 1.25rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    max-width: 78ch;
+    margin: 1.25rem 0;
+    border: 1px solid var(--border);
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    font-size: 0.85rem;
+    line-height: 1.6;
+  }
+  blockquote {
+    margin: 1.5rem 0;
+    padding: 0.9rem 1.25rem;
+    background: var(--quote-bg);
+    border-left: 3px solid var(--quote-border);
+    border-radius: 0 6px 6px 0;
+    max-width: 74ch;
+  }
+  blockquote p:last-child { margin-bottom: 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1.5rem 0;
+    font-size: 0.92rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.65rem 0.9rem;
+    border: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: var(--bg-alt);
+    font-weight: 600;
+  }
+  tr:nth-child(even) td { background: var(--bg-alt); }
+  code.status {
+    font-weight: 600;
+  }
+  .badge {
+    display: inline-block;
+    padding: 0.1em 0.55em;
+    border-radius: 999px;
+    font-size: 0.78em;
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+  }
+  .badge-ok { background: var(--ok-soft); color: var(--ok); }
+  .badge-warn { background: var(--warn-soft); color: var(--warn); }
+  .badge-err { background: var(--err-soft); color: var(--err); }
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2.5rem 0;
+  }
+  .callout {
+    background: var(--accent-soft);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin: 1.5rem 0;
+    max-width: 74ch;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+  .next-steps {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem 1.75rem;
+    margin-top: 1.5rem;
+  }
+  .next-steps ol { padding-left: 1.2rem; }
+  footer.closing {
+    margin-top: 2rem;
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    max-width: 74ch;
+  }
+  @media (max-width: 900px) {
+    nav.toc { display: none; }
+    main { padding: 2rem 1.25rem 4rem; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav class="toc">
+  <a class="toc-prev" href="01-fundamentos-rest.html">&larr; 1. Fundamentos de API REST</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#ciclo-requisicao-resposta">1. Ciclo requisição/resposta</a></li>
+    <li><a href="#anatomia-requisicao">2. Anatomia de uma requisição</a></li>
+    <li><a href="#anatomia-resposta">3. Anatomia de uma resposta</a></li>
+    <li><a href="#metodos-http">4. Métodos HTTP em detalhe</a></li>
+    <li><a href="#safety-idempotencia">5. Safety vs. Idempotência</a></li>
+    <li><a href="#codigos-status">6. Códigos de status HTTP</a></li>
+    <li><a href="#headers-relevantes">7. Headers relevantes</a></li>
+    <li><a href="#erros-comuns">8. Erros conceituais comuns</a></li>
+    <li><a href="#proximos-passos">9. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="03-design-de-recursos-e-uris.html">3. Design de recursos e URIs &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Material de estudo — API REST — Parte 2</div>
+  <h1>HTTP na prática</h1>
+  <p class="subtitle">A parte 1 explicou <strong>por que</strong> REST usa HTTP. Agora vamos entender <strong>como</strong> o protocolo funciona por dentro: o ciclo requisição/resposta, os métodos e seu significado semântico, os códigos de status e os headers que você vai usar toda vez que desenhar um endpoint.</p>
+
+  <h2 id="ciclo-requisicao-resposta">1. O ciclo requisição/resposta</h2>
+  <p>HTTP é um protocolo <strong>request-response</strong>: o cliente sempre inicia a conversa mandando uma requisição, o servidor sempre responde. Não existe o servidor "chamando" o cliente do nada (isso é outro problema, resolvido por WebSocket/SSE, fora do escopo de REST clássico).</p>
+  <p>Fluxo básico:</p>
+  <pre><code>Cliente                                  Servidor
+   |                                          |
+   |--- GET /pedidos/123 HTTP/1.1 ---------&gt;  |
+   |    Host: api.exemplo.com                 |
+   |    Authorization: Bearer xyz             |
+   |                                          |  (processa, consulta banco)
+   |&lt;-- HTTP/1.1 200 OK --------------------  |
+   |    Content-Type: application/json        |
+   |    { "id": 123, "status": "pago" }       |
+   |                                          |</code></pre>
+  <p>Cada requisição é, como vimos na parte 1, <strong>independente</strong> (stateless): essa troca acima não sabe nada sobre a próxima. Tudo que o servidor precisa pra entender veio dentro dela mesma.</p>
+
+  <h2 id="anatomia-requisicao">2. Anatomia de uma requisição HTTP</h2>
+  <p>Toda requisição tem 3 partes:</p>
+  <pre><code>GET /pedidos/123?incluir=itens HTTP/1.1        &lt;- linha de requisição (método + caminho + versão)
+Host: api.exemplo.com                          &lt;- headers
+Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
+Accept: application/json
+
+                                                &lt;- linha em branco separa headers do body
+(sem body em GET)</code></pre>
+  <ul>
+    <li><strong>Linha de requisição</strong>: método (<code>GET</code>), caminho do recurso (<code>/pedidos/123</code>), query string opcional (<code>?incluir=itens</code>), versão do protocolo.</li>
+    <li><strong>Headers</strong>: metadados sobre a requisição — quem está autenticado, que formato o cliente aceita de volta, etc.</li>
+    <li><strong>Body</strong>: dados enviados junto (comum em <code>POST</code>/<code>PUT</code>/<code>PATCH</code>, ausente em <code>GET</code>/<code>DELETE</code> na prática usual).</li>
+  </ul>
+  <p>Exemplo com body, criando um recurso:</p>
+  <pre><code>POST /pedidos HTTP/1.1
+Host: api.exemplo.com
+Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
+Content-Type: application/json
+
+{
+  "produto": "livro",
+  "quantidade": 2
+}</code></pre>
+
+  <h2 id="anatomia-resposta">3. Anatomia de uma resposta HTTP</h2>
+  <pre><code>HTTP/1.1 201 Created                           &lt;- linha de status (versão + código + texto)
+Content-Type: application/json                 &lt;- headers
+Location: /pedidos/501
+
+{
+  "id": 501,
+  "produto": "livro",
+  "quantidade": 2,
+  "status": "pendente"
+}                                                &lt;- body</code></pre>
+  <ul>
+    <li><strong>Linha de status</strong>: código numérico (<code>201</code>) + texto legível (<code>Created</code>).</li>
+    <li><strong>Headers</strong>: metadados da resposta — formato do body, onde achar o recurso recém-criado (<code>Location</code>), regras de cache, etc.</li>
+    <li><strong>Body</strong>: a representação do recurso (quase sempre JSON no seu caso).</li>
+  </ul>
+
+  <h2 id="metodos-http">4. Métodos HTTP em detalhe</h2>
+  <p>Cada verbo tem um significado semântico esperado. Seguir esse significado é o que separa Nível 2 (bem feito) de uma API que só usa métodos como rótulo aleatório.</p>
+
+  <h3>GET — buscar</h3>
+  <p>Busca uma representação do recurso. Não deve alterar nada no servidor. Sem body na requisição (na prática, alguns clientes/servidores nem suportam body em <code>GET</code>).</p>
+  <pre><code>GET /pedidos          &lt;- lista de pedidos (coleção)
+GET /pedidos/123      &lt;- um pedido específico (item)
+GET /pedidos?status=pago&limit=20   &lt;- filtros via query string</code></pre>
+
+  <h3>POST — criar (ou executar ação sem recurso próprio)</h3>
+  <p>Uso mais comum: criar um novo recurso dentro de uma coleção. Servidor decide o identificador do novo recurso e normalmente devolve onde ele ficou (header <code>Location</code>).</p>
+  <pre><code>POST /pedidos
+{ "produto": "livro", "quantidade": 2 }
+
+&rarr; 201 Created
+Location: /pedidos/501</code></pre>
+  <p>Uso secundário, comum na prática: ações que não mapeiam bem pra um recurso CRUD, tipo <code>POST /pedidos/123/cancelar</code> ou <code>POST /sessoes</code> (login). Não é "puro" no sentido de recurso, mas é aceito amplamente no mercado.</p>
+
+  <h3>PUT — substituir por completo</h3>
+  <p>Substitui o recurso <strong>inteiro</strong> no endereço indicado pelo body enviado. Se um campo não vier no body, a expectativa é que ele seja removido/resetado — porque é uma substituição total, não uma atualização parcial.</p>
+  <pre><code>PUT /pedidos/501
+{ "produto": "livro", "quantidade": 3, "status": "pago" }
+
+&rarr; 200 OK (ou 204 No Content)</code></pre>
+
+  <h3>PATCH — atualizar parcialmente</h3>
+  <p>Atualiza só os campos enviados, mantém o resto como está. É o que a maioria das pessoas realmente quer quando pensa em "editar um recurso", mas <code>PUT</code> ainda é mais usado por hábito/simplicidade em várias APIs do mercado.</p>
+  <pre><code>PATCH /pedidos/501
+{ "status": "pago" }
+
+&rarr; 200 OK   (quantidade e produto continuam como estavam)</code></pre>
+
+  <h3>DELETE — remover</h3>
+  <p>Remove o recurso identificado pela URI. Corpo de resposta geralmente vazio.</p>
+  <pre><code>DELETE /pedidos/501
+
+&rarr; 204 No Content</code></pre>
+
+  <h3>HEAD e OPTIONS — menos comuns, mas existem</h3>
+  <ul>
+    <li><strong>HEAD</strong>: igual <code>GET</code>, mas servidor devolve só os headers, sem body. Útil pra checar se recurso existe ou pegar metadados (tamanho, <code>ETag</code>) sem baixar o conteúdo inteiro.</li>
+    <li><strong>OPTIONS</strong>: pergunta "quais métodos esse endpoint aceita?". Usado bastante nos bastidores por navegadores em requisições <em>preflight</em> de CORS — você provavelmente já viu isso no DevTools sem saber o porquê.</li>
+  </ul>
+
+  <h2 id="safety-idempotencia">5. Safety vs. Idempotência</h2>
+  <p>Dois conceitos parecidos, mas diferentes. <strong>Idempotência</strong> já foi apresentada na parte 1 (repetir N vezes = mesmo estado final). <strong>Safety</strong> (segurança, no sentido HTTP) é mais restrito: método <em>seguro</em> não modifica o servidor de jeito nenhum — nem na primeira chamada.</p>
+  <table>
+    <thead>
+      <tr><th>Método</th><th>Seguro (não altera nada)</th><th>Idempotente</th><th>Cacheável por padrão</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>GET</code></td><td><span class="badge badge-ok">sim</span></td><td><span class="badge badge-ok">sim</span></td><td><span class="badge badge-ok">sim</span></td></tr>
+      <tr><td><code>HEAD</code></td><td><span class="badge badge-ok">sim</span></td><td><span class="badge badge-ok">sim</span></td><td><span class="badge badge-ok">sim</span></td></tr>
+      <tr><td><code>OPTIONS</code></td><td><span class="badge badge-ok">sim</span></td><td><span class="badge badge-ok">sim</span></td><td><span class="badge badge-err">não</span></td></tr>
+      <tr><td><code>PUT</code></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-ok">sim</span></td><td><span class="badge badge-err">não</span></td></tr>
+      <tr><td><code>DELETE</code></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-ok">sim</span></td><td><span class="badge badge-err">não</span></td></tr>
+      <tr><td><code>PATCH</code></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-warn">depende</span></td><td><span class="badge badge-err">não</span></td></tr>
+      <tr><td><code>POST</code></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-warn">depende</span></td></tr>
+    </tbody>
+  </table>
+  <p><code>PATCH</code> "depende" porque o resultado varia com o que está sendo aplicado: <code>{"status": "pago"}</code> é idempotente (repetir dá o mesmo resultado), mas <code>{"quantidade": "+1"}</code> (incremento relativo) não é — cada chamada muda o estado de novo.</p>
+  <div class="callout"><p>Por que isso importa na prática: navegadores, proxies e bibliotecas HTTP <strong>retentam automaticamente</strong> métodos seguros/idempotentes quando a conexão falha, sem perguntar. Um <code>POST</code> nunca é retentado automaticamente por padrão — é por isso que formulário duplicado / compra duplicada é um problema clássico de <code>POST</code>, e não de <code>GET</code>.</p></div>
+
+  <h2 id="codigos-status">6. Códigos de status HTTP</h2>
+  <p>Organizados em 5 categorias pelo primeiro dígito:</p>
+  <table>
+    <thead>
+      <tr><th>Faixa</th><th>Categoria</th><th>Significado geral</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>1xx</code></td><td>Informational</td><td>Requisição recebida, processo continua (raramente aparece no seu dia a dia de API REST)</td></tr>
+      <tr><td><code>2xx</code></td><td>Success</td><td>Deu certo</td></tr>
+      <tr><td><code>3xx</code></td><td>Redirection</td><td>Recurso está em outro lugar, siga o novo endereço</td></tr>
+      <tr><td><code>4xx</code></td><td>Client Error</td><td>O cliente errou (dado inválido, não autenticado, recurso não existe)</td></tr>
+      <tr><td><code>5xx</code></td><td>Server Error</td><td>O servidor errou (bug, banco fora do ar, etc.) — cliente fez tudo certo</td></tr>
+    </tbody>
+  </table>
+  <p>Os que você vai realmente usar o tempo todo:</p>
+  <table>
+    <thead>
+      <tr><th>Código</th><th>Nome</th><th>Quando usar</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code class="status">200</code></td><td>OK</td><td>Sucesso genérico com body de resposta (<code>GET</code>, <code>PUT</code>, <code>PATCH</code> bem-sucedidos)</td></tr>
+      <tr><td><code class="status">201</code></td><td>Created</td><td><code>POST</code> que criou um recurso novo. Vem acompanhado do header <code>Location</code></td></tr>
+      <tr><td><code class="status">204</code></td><td>No Content</td><td>Sucesso sem body de resposta (comum em <code>DELETE</code>, às vezes <code>PUT</code>)</td></tr>
+      <tr><td><code class="status">400</code></td><td>Bad Request</td><td>Body/parâmetros malformados ou inválidos — erro de quem enviou</td></tr>
+      <tr><td><code class="status">401</code></td><td>Unauthorized</td><td>Não autenticado — token ausente, inválido ou expirado</td></tr>
+      <tr><td><code class="status">403</code></td><td>Forbidden</td><td>Autenticado, mas sem permissão pra essa ação (autorização, não autenticação)</td></tr>
+      <tr><td><code class="status">404</code></td><td>Not Found</td><td>Recurso não existe nesse caminho</td></tr>
+      <tr><td><code class="status">409</code></td><td>Conflict</td><td>Requisição conflita com o estado atual (ex: criar recurso com identificador que já existe)</td></tr>
+      <tr><td><code class="status">422</code></td><td>Unprocessable Entity</td><td>Sintaxe do body ok, mas dado semanticamente inválido (ex: e-mail sem <code>@</code>, campo obrigatório vazio)</td></tr>
+      <tr><td><code class="status">500</code></td><td>Internal Server Error</td><td>Erro genérico não tratado no servidor — bug, exceção não capturada</td></tr>
+      <tr><td><code class="status">503</code></td><td>Service Unavailable</td><td>Servidor temporariamente fora (deploy, sobrecarga, manutenção)</td></tr>
+    </tbody>
+  </table>
+  <div class="callout"><p><strong>401 vs 403, erro comum de confundir</strong>: <code>401</code> = "eu não sei quem você é" (falta login/token válido). <code>403</code> = "eu sei quem você é, mas você não pode fazer isso" (ex: usuário comum tentando acessar rota de admin).</p></div>
+
+  <h2 id="headers-relevantes">7. Headers relevantes</h2>
+  <table>
+    <thead>
+      <tr><th>Header</th><th>Direção</th><th>Pra que serve</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>Content-Type</code></td><td>requisição e resposta</td><td>Formato do body (<code>application/json</code>, <code>multipart/form-data</code>, etc.)</td></tr>
+      <tr><td><code>Accept</code></td><td>requisição</td><td>Cliente diz que formato(s) aceita de volta (<code>application/json</code>)</td></tr>
+      <tr><td><code>Authorization</code></td><td>requisição</td><td>Credencial — <code>Bearer &lt;token&gt;</code>, como visto na parte 1 sobre statelessness</td></tr>
+      <tr><td><code>Location</code></td><td>resposta</td><td>Onde achar o recurso recém-criado, junto com <code>201</code></td></tr>
+      <tr><td><code>Cache-Control</code></td><td>resposta</td><td>Regras de cache: <code>no-store</code>, <code>max-age=3600</code>, etc. — a restrição Cacheable da parte 1, na prática</td></tr>
+      <tr><td><code>ETag</code></td><td>resposta</td><td>"Impressão digital" da versão atual do recurso, usada pra cache condicional e pra evitar sobrescrever mudanças concorrentes</td></tr>
+      <tr><td><code>If-Match</code> / <code>If-None-Match</code></td><td>requisição</td><td>Cliente manda o <code>ETag</code> que tinha; servidor compara antes de aplicar a mudança ou devolver o body de novo</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="erros-comuns">8. Erros conceituais comuns</h2>
+  <ol>
+    <li><strong>"200 pra tudo que deu certo, 500 pra tudo que deu errado"</strong> — Não. Erro de validação do cliente é <code>4xx</code>, não <code>500</code>. Reservar <code>5xx</code> só pra falha real do servidor ajuda muito na hora de debugar (log de <code>5xx</code> = "meu código quebrou", log de <code>4xx</code> = "cliente mandou algo errado").</li>
+    <li><strong>"PUT e PATCH são a mesma coisa"</strong> — Não. <code>PUT</code> substitui o recurso inteiro (campo ausente = removido); <code>PATCH</code> altera só o que foi enviado.</li>
+    <li><strong>"DELETE precisa devolver o recurso deletado no body"</strong> — Não é obrigatório. <code>204 No Content</code> sem body é o mais comum e correto.</li>
+    <li><strong>"401 é pra qualquer erro de permissão"</strong> — Não, ver distinção <code>401</code> vs <code>403</code> acima.</li>
+  </ol>
+
+  <h2 id="proximos-passos">9. O que vem a seguir</h2>
+  <p>Este documento cobriu o protocolo em si — métodos, status, headers. O próximo material aplica isso ao <strong>desenho da API</strong>:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Design de recursos e URIs</strong>: como nomear endpoints bem, convenções de mercado, aninhamento de recursos, filtros/paginação/ordenação.</li>
+      <li><strong>Escolha de stack</strong>: qual linguagem/framework vamos usar pra construir.</li>
+      <li><strong>Primeira API funcional</strong>: colocar a mão na massa.</li>
+      <li><strong>Autenticação e autorização</strong> (JWT, API keys, OAuth — visão geral).</li>
+      <li><strong>Boas práticas de produção</strong>: versionamento, tratamento de erros, validação, documentação (OpenAPI/Swagger).</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Quando terminar de ler este arquivo, volte com suas dúvidas. Perguntas do tipo "por que 422 existe se já tenho 400?" ou "quando devo usar PATCH em vez de PUT?" são o tipo de coisa que vale esclarecer antes de desenhar os primeiros endpoints.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>
