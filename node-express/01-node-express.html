@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Configurando o ambiente: Node + Express + Postgres + Docker</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="../api-rest/05-primeira-api-funcional.html">&larr; API REST — 5. Primeira API funcional</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#visao-geral">1. Visão geral: o que vamos montar</a></li>
+    <li><a href="#passo-1-node">2. Passo 1 — Instalar Node.js</a></li>
+    <li><a href="#passo-2-docker">3. Passo 2 — Instalar Docker</a></li>
+    <li><a href="#docker-em-5-minutos">4. Docker em 5 minutos</a></li>
+    <li><a href="#passo-3-postgres">5. Passo 3 — Postgres com Docker Compose</a></li>
+    <li><a href="#passo-4-verificar">6. Passo 4 — Verificar que o banco está no ar</a></li>
+    <li><a href="#passo-5-cliente-grafico">7. Passo 5 — Cliente gráfico (opcional)</a></li>
+    <li><a href="#passo-6-projeto-node">8. Passo 6 — Criar o projeto Node</a></li>
+    <li><a href="#passo-7-env">9. Passo 7 — Variáveis de ambiente</a></li>
+    <li><a href="#estrutura-inicial">10. Estrutura de pastas inicial</a></li>
+    <li><a href="#checklist-final">11. Checklist final</a></li>
+    <li><a href="#proximos-passos">12. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="02-projeto-academia.html">2. Projeto: API de uma academia &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Guia de setup — Stack Node + Express + Postgres</div>
+  <h1>Configurando o ambiente: Node + Express + Postgres + Docker</h1>
+  <p class="subtitle">Este guia é <strong>específico da stack</strong> Node.js + Express + Postgres, decidida na parte 4 da trilha API REST. Cobre tudo que precisa estar pronto <strong>antes</strong> de escrever a primeira linha de código da API: instalar Node, entender e instalar Docker, subir um Postgres local, e preparar o projeto. Assume que você nunca usou Docker antes — cada passo explica o porquê antes do comando.</p>
+
+  <h2 id="visao-geral">1. Visão geral: o que vamos montar</h2>
+  <p>No fim deste guia, você vai ter no seu computador:</p>
+  <ul>
+    <li><strong>Node.js</strong> instalado — o runtime que executa JavaScript fora do navegador, onde a API vai rodar.</li>
+    <li><strong>Docker</strong> instalado — ferramenta pra rodar programas "empacotados" (containers), sem precisar instalar cada um deles diretamente no seu sistema operacional.</li>
+    <li><strong>Postgres rodando dentro de um container Docker</strong>, escutando na porta padrão, com os dados persistidos em disco (não somem se você desligar o container).</li>
+    <li><strong>Uma pasta de projeto</strong> com Node inicializado, Express instalado, e um arquivo <code>.env</code> apontando pra esse Postgres.</li>
+  </ul>
+  <p>Nenhuma linha de rota, handler ou lógica de negócio ainda — isso é assunto de um próximo material, que vai aplicar os conceitos da parte 5 (camadas, roteamento, persistência) já usando essa stack concreta.</p>
+
+  <h2 id="passo-1-node">2. Passo 1 — Instalar Node.js</h2>
+  <p>Se você já roda projetos React, provavelmente já tem Node instalado. Confirma no terminal:</p>
+  <pre><code>node -v
+npm -v</code></pre>
+  <p>Se aparecer um número de versão pra cada comando, pode pular pro Passo 2. Recomendado: <strong>Node 18 ou superior</strong> (versões mais recentes têm suporte nativo a recursos que facilitam o dia a dia, como <code>fetch</code> embutido).</p>
+  <p>Se não tiver Node instalado, ou quiser trocar de versão facilmente no futuro, a forma mais flexível é usar o <strong>nvm</strong> (Node Version Manager) em vez de instalar o Node direto do site:</p>
+  <pre><code># instala o nvm
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+
+# fecha e reabre o terminal, ou roda:
+source ~/.bashrc
+
+# instala a versão LTS (mais estável) do Node
+nvm install --lts
+
+# confirma
+node -v
+npm -v</code></pre>
+  <div class="callout"><p>Por que <code>nvm</code> em vez de instalar Node direto: projetos diferentes às vezes exigem versões diferentes de Node. Com <code>nvm</code>, trocar de versão é um comando (<code>nvm use 18</code>), sem reinstalar nada.</p></div>
+
+  <h2 id="passo-2-docker">3. Passo 2 — Instalar Docker</h2>
+  <p>Ubuntu/Debian já tem um pacote <code>docker.io</code> nos repositórios padrão, mas ele costuma ficar desatualizado. O caminho recomendado é instalar direto do repositório oficial do Docker:</p>
+  <pre><code># remove versões antigas/conflitantes, se existirem (pode dar "erro" se não tiver nenhuma — normal)
+sudo apt remove docker docker-engine docker.io containerd runc
+
+# atualiza a lista de pacotes e instala dependências
+sudo apt update
+sudo apt install ca-certificates curl gnupg
+
+# adiciona a chave GPG oficial do Docker
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+# adiciona o repositório oficial do Docker à lista de fontes do apt
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# instala o Docker de verdade
+sudo apt update
+sudo apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin</code></pre>
+  <p>Confirma que instalou:</p>
+  <pre><code>docker --version
+docker compose version</code></pre>
+  <h3>Rodar Docker sem precisar de <code>sudo</code> toda vez</h3>
+  <p>Por padrão, todo comando <code>docker</code> exige <code>sudo</code>. Pra evitar digitar isso sempre, adiciona seu usuário ao grupo <code>docker</code>:</p>
+  <pre><code>sudo usermod -aG docker $USER</code></pre>
+  <div class="warn"><p><strong>Importante:</strong> essa mudança só tem efeito numa sessão de terminal <em>nova</em>. Feche e abra o terminal de novo (ou faça logout/login na máquina). Só depois disso rodar <code>docker</code> sem <code>sudo</code> vai funcionar.</p></div>
+  <p>Testa se está tudo certo:</p>
+  <pre><code>docker run hello-world</code></pre>
+  <p>Se aparecer uma mensagem começando com "Hello from Docker!", está funcionando.</p>
+
+  <h2 id="docker-em-5-minutos">4. Docker em 5 minutos</h2>
+  <p>Antes de subir o Postgres, vale entender 4 palavras que vão aparecer o tempo todo:</p>
+  <table>
+    <thead><tr><th>Termo</th><th>O que é</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Imagem</strong></td><td>Um "molde" pronto de um programa, com tudo que ele precisa pra rodar já embutido (ex: a imagem oficial do Postgres já vem com o banco instalado e configurado). Você não cria a imagem do zero — baixa uma pronta.</td></tr>
+      <tr><td><strong>Container</strong></td><td>Uma instância <em>rodando</em> de uma imagem. É tipo a diferença entre uma receita (imagem) e o bolo assado (container) — pode criar vários containers a partir da mesma imagem.</td></tr>
+      <tr><td><strong>Porta (<em>port mapping</em>)</strong></td><td>O container roda isolado da sua máquina. Pra acessar algo dentro dele (ex: conectar no Postgres), você "abre uma porta" ligando uma porta do seu computador a uma porta de dentro do container.</td></tr>
+      <tr><td><strong>Volume</strong></td><td>Espaço em disco que sobrevive mesmo se o container for apagado. Sem volume, os dados do banco somem quando o container morre — com volume, ficam salvos no seu computador.</td></tr>
+    </tbody>
+  </table>
+  <p>E por que <strong>Docker Compose</strong> em vez de comandos <code>docker run</code> soltos: Compose deixa você descrever, num arquivo, exatamente como quer que o container suba (imagem, porta, senha, volume) — daí é só um comando pra subir tudo de novo sempre igual, sem decorar uma linha de comando gigante.</p>
+
+  <h2 id="passo-3-postgres">5. Passo 3 — Postgres com Docker Compose</h2>
+  <p>Cria uma pasta pro projeto e, dentro dela, um arquivo chamado <code>docker-compose.yml</code>:</p>
+  <pre><code>mkdir minha-api
+cd minha-api</code></pre>
+  <p>Conteúdo do <code>docker-compose.yml</code>:</p>
+  <pre><code>services:
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: senha123
+      POSTGRES_DB: estudo
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:</code></pre>
+  <p>O que cada linha faz:</p>
+  <ul>
+    <li><code>image: postgres:16</code> — usa a imagem oficial do Postgres, versão 16.</li>
+    <li><code>environment</code> — variáveis que a imagem do Postgres usa pra se configurar sozinha na primeira vez que sobe: usuário, senha, nome do banco inicial.</li>
+    <li><code>ports: "5432:5432"</code> — liga a porta 5432 da sua máquina à porta 5432 de dentro do container (5432 é a porta padrão do Postgres).</li>
+    <li><code>volumes</code> — salva os dados do banco numa área persistente chamada <code>pgdata</code>, gerenciada pelo Docker. Se você derrubar e subir o container de novo, os dados continuam lá.</li>
+  </ul>
+  <p>Sobe o banco:</p>
+  <pre><code>docker compose up -d</code></pre>
+  <p><code>-d</code> significa "detached" — roda em segundo plano, devolve o terminal pra você. Comandos úteis pra guardar:</p>
+  <pre><code>docker compose ps          # mostra os containers rodando desse projeto
+docker compose logs -f db  # mostra os logs do Postgres em tempo real (Ctrl+C pra sair)
+docker compose down        # desliga e remove o container, mas MANTÉM os dados (o volume continua)
+docker compose down -v     # desliga e apaga TUDO, incluindo os dados salvos — use só se quiser zerar o banco</code></pre>
+
+  <h2 id="passo-4-verificar">6. Passo 4 — Verificar que o banco está no ar</h2>
+  <p>Confirma que o container está rodando:</p>
+  <pre><code>docker compose ps</code></pre>
+  <p>Deve aparecer um container chamado algo como <code>minha-api-db-1</code>, com status <code>Up</code>. Pra entrar direto no banco via terminal, dentro do próprio container:</p>
+  <pre><code>docker compose exec db psql -U postgres -d estudo</code></pre>
+  <p>Isso abre o <strong>psql</strong>, o cliente de linha de comando do Postgres. Testa com:</p>
+  <pre><code>SELECT version();</code></pre>
+  <p>Deve devolver a versão do Postgres instalada. Pra sair do <code>psql</code>:</p>
+  <pre><code>\q</code></pre>
+
+  <h2 id="passo-5-cliente-grafico">7. Passo 5 — Cliente gráfico (opcional, mas recomendado)</h2>
+  <p><code>psql</code> funciona, mas visualizar tabelas/dados numa interface gráfica é bem mais confortável enquanto aprende. Opção gratuita e multiplataforma: <strong>DBeaver Community</strong>.</p>
+  <p>Baixe em <code>dbeaver.io</code> (versão Community, gratuita) e configure uma nova conexão Postgres com estes dados (os mesmos do <code>docker-compose.yml</code>):</p>
+  <table>
+    <thead><tr><th>Campo</th><th>Valor</th></tr></thead>
+    <tbody>
+      <tr><td>Host</td><td><code>localhost</code></td></tr>
+      <tr><td>Porta</td><td><code>5432</code></td></tr>
+      <tr><td>Banco</td><td><code>estudo</code></td></tr>
+      <tr><td>Usuário</td><td><code>postgres</code></td></tr>
+      <tr><td>Senha</td><td><code>senha123</code></td></tr>
+    </tbody>
+  </table>
+  <p>Isso é só pra você inspecionar visualmente o banco enquanto estuda — a API não depende de nenhum cliente gráfico pra funcionar.</p>
+
+  <h2 id="passo-6-projeto-node">8. Passo 6 — Criar o projeto Node</h2>
+  <p>Na mesma pasta <code>minha-api</code> (onde já está o <code>docker-compose.yml</code>), inicializa o projeto Node:</p>
+  <pre><code>npm init -y</code></pre>
+  <p>Isso cria um <code>package.json</code> com valores padrão. Agora instala as dependências que vamos usar:</p>
+  <pre><code>npm install express pg dotenv
+npm install --save-dev nodemon</code></pre>
+  <ul>
+    <li><strong><code>express</code></strong> — o framework web, já discutido na parte 4.</li>
+    <li><strong><code>pg</code></strong> — driver que permite ao Node conversar com Postgres.</li>
+    <li><strong><code>dotenv</code></strong> — carrega variáveis de ambiente de um arquivo <code>.env</code> pro processo Node.</li>
+    <li><strong><code>nodemon</code></strong> (dependência de desenvolvimento) — reinicia o servidor automaticamente a cada alteração salva no código, evita reiniciar na mão toda hora.</li>
+  </ul>
+  <p>No <code>package.json</code>, adiciona um script pra facilitar rodar em modo desenvolvimento. Abre o arquivo e adiciona dentro de <code>"scripts"</code>:</p>
+  <pre><code>"scripts": {
+  "dev": "nodemon index.js"
+}</code></pre>
+
+  <h2 id="passo-7-env">9. Passo 7 — Variáveis de ambiente</h2>
+  <p>Cria um arquivo <code>.env</code> na raiz do projeto, com a informação de como conectar no Postgres que você subiu no Passo 3:</p>
+  <pre><code>DATABASE_URL=postgresql://postgres:senha123@localhost:5432/estudo
+PORT=3000</code></pre>
+  <p>Por que isso importa: credenciais e configuração não deveriam ficar escritas direto no código (dificulta trocar entre ambientes, e é fácil vazar sem querer se o código for público — como este repositório vai ser). O arquivo <code>.env</code> fica de fora do controle de versão.</p>
+  <p>Cria também um <code>.gitignore</code> na raiz, se ainda não existir, com pelo menos:</p>
+  <pre><code>node_modules
+.env</code></pre>
+  <div class="warn"><p><strong>Atenção:</strong> como este repositório de estudo vai pra um GitHub público, <code>.env</code> nunca deve ser commitado — ele carrega a senha do banco. O <code>.gitignore</code> acima evita isso, mas vale sempre conferir com <code>git status</code> antes de commitar.</p></div>
+
+  <h2 id="estrutura-inicial">10. Estrutura de pastas inicial</h2>
+  <p>Não precisa criar tudo agora — mas pra já deixar o terreno preparado pro próximo material (que vai aplicar as camadas da parte 5 com código real), a pasta do projeto deve estar assim ao final deste guia:</p>
+  <pre><code>minha-api/
+├── docker-compose.yml
+├── package.json
+├── package-lock.json
+├── .env
+├── .gitignore
+└── node_modules/      (gerado pelo npm install, não mexe manualmente)</code></pre>
+  <p>Ainda não existe <code>index.js</code> nem nenhuma rota — isso é o próximo passo da trilha, fora do escopo deste guia de ambiente.</p>
+
+  <h2 id="checklist-final">11. Checklist final</h2>
+  <p>Antes de considerar o ambiente pronto e partir pro código da API, confirma cada item:</p>
+  <div class="checklist">
+    <ul>
+      <li><code>node -v</code> mostra versão 18 ou superior</li>
+      <li><code>docker --version</code> e <code>docker compose version</code> funcionam sem erro</li>
+      <li><code>docker run hello-world</code> funciona sem precisar de <code>sudo</code></li>
+      <li><code>docker compose up -d</code> sobe o Postgres sem erro, <code>docker compose ps</code> mostra status <code>Up</code></li>
+      <li>Consegue entrar no banco com <code>docker compose exec db psql -U postgres -d estudo</code> e rodar <code>SELECT version();</code></li>
+      <li>(Opcional) Cliente gráfico conectado e mostrando o banco <code>estudo</code> vazio</li>
+      <li><code>package.json</code> existe, com <code>express</code>, <code>pg</code>, <code>dotenv</code> e <code>nodemon</code> instalados</li>
+      <li><code>.env</code> criado com <code>DATABASE_URL</code> e <code>PORT</code></li>
+      <li><code>.gitignore</code> criado, incluindo <code>node_modules</code> e <code>.env</code></li>
+    </ul>
+  </div>
+  <p>Com tudo isso marcado, o ambiente está pronto — falta só escrever código.</p>
+
+  <h2 id="proximos-passos">12. O que vem a seguir</h2>
+  <p>Este guia cobriu só o <strong>ambiente</strong>. Antes de escrever a primeira rota, o próximo material define o projeto que vamos construir com essa stack — um domínio fictício (academia) com entidades e regras de negócio já definidas, pra toda implementação seguinte ter propósito real, não rotas soltas sem contexto.</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Projeto: API de uma academia</strong>: entidades, relacionamentos, regras de negócio e mapa de endpoints que os próximos materiais vão implementar.</li>
+      <li><strong>Primeiro endpoint funcional</strong>: servidor Express de pé, rota <code>GET</code> simples, conexão com o Postgres testada.</li>
+      <li><strong>CRUD completo</strong> de um recurso, aplicando tudo das partes 2 e 3 da trilha API REST (verbos, status codes, design de URI) em cima da stack real.</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Quando terminar o checklist, volte com dúvidas — principalmente se algum comando de Docker der erro diferente do esperado. Erro de permissão, porta já em uso (<code>5432</code> ocupada por um Postgres nativo já instalado) e esquecer de reabrir o terminal depois do <code>usermod</code> são os três problemas mais comuns nessa etapa.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

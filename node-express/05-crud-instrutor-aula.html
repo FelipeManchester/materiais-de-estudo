@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CRUD completo: Instrutor e Aula</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="04-primeiro-endpoint-funcional.html">&larr; 4. Primeiro endpoint funcional</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#por-que-separar">1. Por que separar em camadas agora</a></li>
+    <li><a href="#nova-estrutura">2. Nova estrutura de pastas</a></li>
+    <li><a href="#pool-centralizado">3. Centralizando a conexão: db/pool.js</a></li>
+    <li><a href="#express-router">4. Express Router: dividindo rotas por recurso</a></li>
+    <li><a href="#refatorando-alunos">5. Refatorando alunos pro novo padrão</a></li>
+    <li><a href="#crud-instrutor">6. CRUD de Instrutor</a></li>
+    <li><a href="#crud-aula">7. CRUD de Aula</a></li>
+    <li><a href="#index-final">8. index.js final</a></li>
+    <li><a href="#testando">9. Testando tudo com curl</a></li>
+    <li><a href="#erros-comuns">10. Erros comuns</a></li>
+    <li><a href="#proximos-passos">11. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="06-matricula-e-regras.html">6. Matrícula e suas regras &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 5</div>
+  <h1>CRUD completo: Instrutor e Aula</h1>
+  <p class="subtitle">A parte 4 validou o caminho ponta a ponta com <code>alunos</code>, tudo num arquivo só. Agora o projeto cresce — duas entidades novas, uma delas (<code>aulas</code>) com regra de negócio de verdade (Regra 3: conflito de agenda). Hora de sair do arquivo único e organizar em camadas, como a parte 5 da trilha API REST descreveu em teoria.</p>
+
+  <h2 id="por-que-separar">1. Por que separar em camadas agora</h2>
+  <p>A parte 5 da trilha API REST (seção 2) já avisou: "numa API pequena, tudo bem misturar camadas no começo... separar vem depois, quando o código começar a doer". Esse momento chegou — com 3 entidades, o <code>index.js</code> ficaria com centenas de linhas, rotas de recursos diferentes misturadas, difícil de navegar.</p>
+  <p>A separação que vamos aplicar segue exatamente as camadas já descritas naquele material:</p>
+  <ul>
+    <li><strong>Rotas</strong> (<code>routes/</code>): mapeia método + URI pro handler certo (parte 5, "Roteamento").</li>
+    <li><strong>Repository</strong> (<code>repositories/</code>): isola todo acesso ao banco — é a única camada que escreve SQL.</li>
+  </ul>
+  <p>Ainda não vamos criar uma camada de "service" separada da rota — as regras de negócio (Regra 3, por exemplo) vão morar dentro do handler da rota por enquanto. Com só duas entidades novas e regras simples, uma camada a mais adicionaria abstração sem ganho real ainda. Se o projeto crescer mais, essa extração vira natural.</p>
+
+  <h2 id="nova-estrutura">2. Nova estrutura de pastas</h2>
+  <div class="file-tree">
+minha-api/<br>
+├── db/<br>
+│   ├── schema.sql<br>
+│   └── pool.js<br>
+├── repositories/<br>
+│   ├── alunosRepository.js<br>
+│   ├── instrutoresRepository.js<br>
+│   └── aulasRepository.js<br>
+├── routes/<br>
+│   ├── alunos.js<br>
+│   ├── instrutores.js<br>
+│   └── aulas.js<br>
+├── index.js<br>
+├── .env<br>
+└── package.json
+  </div>
+  <p>Um arquivo de rota e um de repository por entidade — fácil de achar onde mexer quando for dar manutenção em <code>aulas</code>, por exemplo, sem precisar ler o projeto inteiro.</p>
+
+  <h2 id="pool-centralizado">3. Centralizando a conexão: db/pool.js</h2>
+  <p>Até agora o <code>Pool</code> era criado direto no <code>index.js</code>. Com 3 repositories precisando consultar o banco, cada um teria que criar seu próprio <code>Pool</code> — desperdício de conexões, e cada um se conectando com config potencialmente diferente. Centraliza num único módulo:</p>
+  <pre><code>// db/pool.js
+const { Pool } = require('pg');
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+module.exports = pool;</code></pre>
+  <p>Qualquer arquivo que precisar consultar o banco importa esse mesmo <code>pool</code> — uma única instância compartilhada em todo o projeto (o próprio <code>Pool</code> já gerencia múltiplas conexões internamente, como visto na parte 4, seção 3; não precisa de mais de um <code>Pool</code> por processo).</p>
+
+  <h2 id="express-router">4. Express Router: dividindo rotas por recurso</h2>
+  <p><code>express.Router()</code> cria um "mini-app" — um agrupador de rotas que depois se conecta no app principal. Em vez de <code>app.get('/alunos', ...)</code> direto no <code>index.js</code>, cada arquivo de rota declara suas rotas <strong>relativas</strong>:</p>
+  <pre><code>// routes/alunos.js (esqueleto)
+const express = require('express');
+const router = express.Router();
+
+router.get('/', async (req, res) => { /* ... */ });   // vira GET /alunos
+router.post('/', async (req, res) => { /* ... */ });  // vira POST /alunos
+
+module.exports = router;</code></pre>
+  <p>E no <code>index.js</code>, o prefixo é definido na hora de "montar" o router:</p>
+  <pre><code>const alunosRouter = require('./routes/alunos');
+app.use('/alunos', alunosRouter);</code></pre>
+  <p><code>router.get('/')</code> dentro de <code>alunos.js</code> + <code>app.use('/alunos', ...)</code> no <code>index.js</code> = <code>GET /alunos</code> de verdade. <code>router.get('/:id')</code> viraria <code>GET /alunos/:id</code>. O arquivo de rota nem precisa saber que está "dentro" de <code>/alunos</code> — só declara o que vem depois desse prefixo.</p>
+
+  <h2 id="refatorando-alunos">5. Refatorando alunos pro novo padrão</h2>
+  <p>Primeiro, migra o que já existe e funciona — sem mudar comportamento, só organização:</p>
+  <pre><code>// repositories/alunosRepository.js
+const pool = require('../db/pool');
+
+async function listar() {
+  const resultado = await pool.query('SELECT * FROM alunos ORDER BY id');
+  return resultado.rows;
+}
+
+async function criar({ nome, email, data_nascimento }) {
+  const resultado = await pool.query(
+    'INSERT INTO alunos (nome, email, data_nascimento) VALUES ($1, $2, $3) RETURNING *',
+    [nome, email, data_nascimento]
+  );
+  return resultado.rows[0];
+}
+
+module.exports = { listar, criar };</code></pre>
+  <pre><code>// routes/alunos.js
+const express = require('express');
+const alunosRepository = require('../repositories/alunosRepository');
+
+const router = express.Router();
+
+router.get('/', async (req, res) => {
+  const alunos = await alunosRepository.listar();
+  res.json(alunos);
+});
+
+router.post('/', async (req, res) => {
+  const { nome, email, data_nascimento } = req.body;
+
+  if (!nome || !email || !data_nascimento) {
+    return res.status(400).json({
+      erro: 'nome, email e data_nascimento são obrigatórios',
+    });
+  }
+
+  const alunoCriado = await alunosRepository.criar({ nome, email, data_nascimento });
+  res.status(201).location(`/alunos/${alunoCriado.id}`).json(alunoCriado);
+});
+
+module.exports = router;</code></pre>
+  <p>Repara a diferença de responsabilidade: <strong>rota</strong> lê o corpo da requisição, valida forma, monta a resposta. <strong>Repository</strong> só sabe escrever SQL e devolver linha — não sabe o que é <code>req</code>/<code>res</code>, não sabe HTTP existe. Isso é a separação de camadas da parte 5 (trilha API REST) virando código real.</p>
+
+  <h2 id="crud-instrutor">6. CRUD de Instrutor</h2>
+  <p>Instrutor não tem regra de negócio própria — mas <strong>tem</strong> um detalhe importante: outras tabelas dependem dele (<code>aulas.instrutor_id</code>, com <code>ON DELETE RESTRICT</code>, decidido na parte 3). Isso aparece na hora de deletar.</p>
+
+  <h3>Repository</h3>
+  <pre><code>// repositories/instrutoresRepository.js
+const pool = require('../db/pool');
+
+async function listar() {
+  const resultado = await pool.query('SELECT * FROM instrutores ORDER BY id');
+  return resultado.rows;
+}
+
+async function buscarPorId(id) {
+  const resultado = await pool.query('SELECT * FROM instrutores WHERE id = $1', [id]);
+  return resultado.rows[0]; // undefined se não existir
+}
+
+async function criar({ nome, especialidade }) {
+  const resultado = await pool.query(
+    'INSERT INTO instrutores (nome, especialidade) VALUES ($1, $2) RETURNING *',
+    [nome, especialidade]
+  );
+  return resultado.rows[0];
+}
+
+async function atualizar(id, { nome, especialidade }) {
+  const resultado = await pool.query(
+    `UPDATE instrutores
+     SET nome = COALESCE($1, nome),
+         especialidade = COALESCE($2, especialidade)
+     WHERE id = $3
+     RETURNING *`,
+    [nome, especialidade, id]
+  );
+  return resultado.rows[0]; // undefined se o id não existir
+}
+
+async function remover(id) {
+  const resultado = await pool.query('DELETE FROM instrutores WHERE id = $1 RETURNING *', [id]);
+  return resultado.rows[0]; // undefined se o id não existir
+}
+
+module.exports = { listar, buscarPorId, criar, atualizar, remover };</code></pre>
+  <div class="warn"><p><strong>Cuidado com <code>undefined</code> em query parametrizada:</strong> a biblioteca <code>pg</code> lança erro se você passar <code>undefined</code> num dos parâmetros — precisa ser <code>null</code> quando o valor "não veio". Por isso, na rota (a seguir), campos não enviados no <code>PATCH</code> são convertidos com <code>nome ?? null</code> antes de chegar aqui.</p></div>
+  <p><code>COALESCE($1, nome)</code>: se o parâmetro vier <code>null</code>, usa o valor que já estava na coluna — é assim que o <code>UPDATE</code> vira parcial (semântica de <code>PATCH</code>, parte 2 da trilha API REST) mesmo escrevendo um único <code>UPDATE</code> que sempre define as duas colunas.</p>
+
+  <h3>Rotas</h3>
+  <pre><code>// routes/instrutores.js
+const express = require('express');
+const instrutoresRepository = require('../repositories/instrutoresRepository');
+
+const router = express.Router();
+
+router.get('/', async (req, res) => {
+  const instrutores = await instrutoresRepository.listar();
+  res.json(instrutores);
+});
+
+router.get('/:id', async (req, res) => {
+  const instrutor = await instrutoresRepository.buscarPorId(req.params.id);
+
+  if (!instrutor) {
+    return res.status(404).json({ erro: 'Instrutor não encontrado' });
+  }
+
+  res.json(instrutor);
+});
+
+router.post('/', async (req, res) => {
+  const { nome, especialidade } = req.body;
+
+  if (!nome || !especialidade) {
+    return res.status(400).json({ erro: 'nome e especialidade são obrigatórios' });
+  }
+
+  const instrutorCriado = await instrutoresRepository.criar({ nome, especialidade });
+  res.status(201).location(`/instrutores/${instrutorCriado.id}`).json(instrutorCriado);
+});
+
+router.patch('/:id', async (req, res) => {
+  const { nome, especialidade } = req.body;
+
+  const instrutorAtualizado = await instrutoresRepository.atualizar(req.params.id, {
+    nome: nome ?? null,
+    especialidade: especialidade ?? null,
+  });
+
+  if (!instrutorAtualizado) {
+    return res.status(404).json({ erro: 'Instrutor não encontrado' });
+  }
+
+  res.json(instrutorAtualizado);
+});
+
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const instrutorRemovido = await instrutoresRepository.remover(req.params.id);
+
+    if (!instrutorRemovido) {
+      return res.status(404).json({ erro: 'Instrutor não encontrado' });
+    }
+
+    res.status(204).send();
+  } catch (err) {
+    if (err.code === '23503') {
+      return res.status(409).json({
+        erro: 'Não é possível remover: existem aulas cadastradas com este instrutor',
+      });
+    }
+    next(err);
+  }
+});
+
+module.exports = router;</code></pre>
+
+  <div class="rule">
+    <span class="tag">Padrão: 404 sem consulta extra</span>
+    <p>Repara que <code>PATCH</code> e <code>DELETE</code> não fazem um <code>SELECT</code> pra "checar se existe" antes de agir — só rodam o <code>UPDATE</code>/<code>DELETE</code> direto (ambos com <code>RETURNING *</code>) e olham se veio alguma linha de volta. Se <code>resultado.rows[0]</code> vier <code>undefined</code>, o <code>id</code> não existia — devolve <code>404</code>. Uma consulta a menos por requisição, sem perder a checagem.</p>
+  </div>
+
+  <div class="rule">
+    <span class="tag">O código de erro 23503</span>
+    <p><code>23503</code> é o código padrão do Postgres (SQLSTATE) pra <em>foreign_key_violation</em> — é o que a biblioteca <code>pg</code> expõe em <code>err.code</code> quando um <code>DELETE</code> esbarra na restrição <code>ON DELETE RESTRICT</code> (decidida na parte 3, seção 6, tabela <code>aulas</code>). Sem esse <code>try/catch</code>, essa exclusão bloqueada cairia no middleware de erro genérico da parte 4 e devolveria <code>500</code> — tecnicamente funciona, mas <code>500</code> significa "o servidor quebrou", quando na verdade o servidor está funcionando certinho, só recusando uma operação inválida. <code>409 Conflict</code> é a resposta correta (parte 2 da trilha API REST, seção 6): a requisição conflita com o estado atual do sistema.</p>
+  </div>
+
+  <h2 id="crud-aula">7. CRUD de Aula</h2>
+  <p>Aqui entra a Regra 3 do projeto (parte 2): <em>"um instrutor não pode ter duas aulas cadastradas no mesmo horário"</em>. A parte 3 (schema) já deixou claro que essa validação <strong>não</strong> ficaria no banco — fica aqui.</p>
+
+  <h3>Regra 3: detectando conflito de agenda com OVERLAPS</h3>
+  <p>Postgres tem um operador nativo pra comparar dois intervalos e saber se eles se cruzam: <code>OVERLAPS</code>. Recebe dois pares (início, fim) e devolve <code>true</code>/<code>false</code>:</p>
+  <pre><code>SELECT (TIME '09:00', TIME '10:00') OVERLAPS (TIME '09:30', TIME '10:30');
+-- true: os dois intervalos se cruzam entre 09:30 e 10:00
+
+SELECT (TIME '09:00', TIME '10:00') OVERLAPS (TIME '10:00', TIME '11:00');
+-- false: um termina exatamente quando o outro começa, não há sobreposição real</code></pre>
+  <p>Como a tabela <code>aulas</code> guarda <code>hora_inicio</code> + <code>duracao_minutos</code> (não um "fim" pronto), calculamos o horário de término somando um intervalo — <code>hora_inicio + (duracao_minutos * INTERVAL '1 minute')</code>:</p>
+  <pre><code>// repositories/aulasRepository.js (trecho)
+async function existeConflito({ instrutor_id, dia_semana, hora_inicio, duracao_minutos, ignorarId = null }) {
+  const resultado = await pool.query(
+    `SELECT EXISTS (
+       SELECT 1 FROM aulas
+       WHERE instrutor_id = $1
+         AND dia_semana = $2
+         AND id IS DISTINCT FROM $5
+         AND (hora_inicio, hora_inicio + (duracao_minutos * INTERVAL '1 minute'))
+             OVERLAPS
+             ($3::time, $3::time + ($4::int * INTERVAL '1 minute'))
+     ) AS conflito`,
+    [instrutor_id, dia_semana, hora_inicio, duracao_minutos, ignorarId]
+  );
+  return resultado.rows[0].conflito; // true ou false
+}</code></pre>
+  <p>Dois detalhes que valem explicação:</p>
+  <ul>
+    <li><strong><code>SELECT EXISTS (...)</code></strong>: em vez de trazer as linhas conflitantes pro Node e checar <code>.length &gt; 0</code>, pede pro próprio Postgres devolver direto um booleano — mais eficiente, e o código em JS fica só com <code>true</code>/<code>false</code>.</li>
+    <li><strong><code>id IS DISTINCT FROM $5</code></strong>: usado só quando <strong>atualizando</strong> uma aula existente (parâmetro <code>ignorarId</code>) — sem isso, checar conflito de uma aula contra <em>ela mesma</em> sempre daria "conflito" (ela obviamente se sobrepõe ao próprio horário). <code>IS DISTINCT FROM</code> é como um <code>!=</code> que funciona corretamente mesmo quando o valor é <code>NULL</code> (na criação, <code>ignorarId</code> é <code>null</code>, e um <code>!=</code> comum se comportaria de forma inesperada com <code>NULL</code> em SQL — <code>IS DISTINCT FROM</code> evita essa armadilha clássica).</li>
+  </ul>
+
+  <h3>Repository completo</h3>
+  <pre><code>// repositories/aulasRepository.js
+const pool = require('../db/pool');
+
+async function listar({ instrutor_id } = {}) {
+  if (instrutor_id) {
+    const resultado = await pool.query(
+      'SELECT * FROM aulas WHERE instrutor_id = $1 ORDER BY id',
+      [instrutor_id]
+    );
+    return resultado.rows;
+  }
+
+  const resultado = await pool.query('SELECT * FROM aulas ORDER BY id');
+  return resultado.rows;
+}
+
+async function buscarPorId(id) {
+  const resultado = await pool.query('SELECT * FROM aulas WHERE id = $1', [id]);
+  return resultado.rows[0];
+}
+
+async function existeConflito({ instrutor_id, dia_semana, hora_inicio, duracao_minutos, ignorarId = null }) {
+  const resultado = await pool.query(
+    `SELECT EXISTS (
+       SELECT 1 FROM aulas
+       WHERE instrutor_id = $1
+         AND dia_semana = $2
+         AND id IS DISTINCT FROM $5
+         AND (hora_inicio, hora_inicio + (duracao_minutos * INTERVAL '1 minute'))
+             OVERLAPS
+             ($3::time, $3::time + ($4::int * INTERVAL '1 minute'))
+     ) AS conflito`,
+    [instrutor_id, dia_semana, hora_inicio, duracao_minutos, ignorarId]
+  );
+  return resultado.rows[0].conflito;
+}
+
+async function criar({ nome, instrutor_id, dia_semana, hora_inicio, duracao_minutos, capacidade_maxima }) {
+  const resultado = await pool.query(
+    `INSERT INTO aulas (nome, instrutor_id, dia_semana, hora_inicio, duracao_minutos, capacidade_maxima)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [nome, instrutor_id, dia_semana, hora_inicio, duracao_minutos, capacidade_maxima]
+  );
+  return resultado.rows[0];
+}
+
+async function atualizar(id, { nome, instrutor_id, dia_semana, hora_inicio, duracao_minutos, capacidade_maxima }) {
+  const resultado = await pool.query(
+    `UPDATE aulas
+     SET nome = $1, instrutor_id = $2, dia_semana = $3,
+         hora_inicio = $4, duracao_minutos = $5, capacidade_maxima = $6
+     WHERE id = $7
+     RETURNING *`,
+    [nome, instrutor_id, dia_semana, hora_inicio, duracao_minutos, capacidade_maxima, id]
+  );
+  return resultado.rows[0];
+}
+
+async function remover(id) {
+  const resultado = await pool.query('DELETE FROM aulas WHERE id = $1 RETURNING *', [id]);
+  return resultado.rows[0];
+}
+
+module.exports = { listar, buscarPorId, existeConflito, criar, atualizar, remover };</code></pre>
+  <div class="callout"><p>Repara que <code>atualizar</code> aqui <strong>não</strong> usa <code>COALESCE</code> como em <code>instrutoresRepository</code> — grava os 6 campos diretamente. A mesclagem "campo não veio, mantém o valor antigo" acontece na <strong>rota</strong> desta vez (seção seguinte), porque a rota já precisa buscar a aula existente mesmo, pra rodar a checagem de conflito com os valores efetivos. Duas estratégias válidas pra a mesma necessidade (mesclar dado parcial) — a escolhida depende de já ter ou não a linha em mãos por outro motivo.</p></div>
+
+  <h3>Rotas</h3>
+  <pre><code>// routes/aulas.js
+const express = require('express');
+const aulasRepository = require('../repositories/aulasRepository');
+const instrutoresRepository = require('../repositories/instrutoresRepository');
+
+const router = express.Router();
+
+router.get('/', async (req, res) => {
+  const aulas = await aulasRepository.listar({ instrutor_id: req.query.instrutor_id });
+  res.json(aulas);
+});
+
+router.get('/:id', async (req, res) => {
+  const aula = await aulasRepository.buscarPorId(req.params.id);
+
+  if (!aula) {
+    return res.status(404).json({ erro: 'Aula não encontrada' });
+  }
+
+  res.json(aula);
+});
+
+router.post('/', async (req, res) => {
+  const { nome, instrutor_id, dia_semana, hora_inicio, duracao_minutos, capacidade_maxima } = req.body;
+
+  if (!nome || !instrutor_id || !dia_semana || !hora_inicio || !duracao_minutos || !capacidade_maxima) {
+    return res.status(400).json({
+      erro: 'nome, instrutor_id, dia_semana, hora_inicio, duracao_minutos e capacidade_maxima são obrigatórios',
+    });
+  }
+
+  const instrutorExiste = await instrutoresRepository.buscarPorId(instrutor_id);
+  if (!instrutorExiste) {
+    return res.status(422).json({ erro: 'instrutor_id não corresponde a nenhum instrutor existente' });
+  }
+
+  const temConflito = await aulasRepository.existeConflito({
+    instrutor_id, dia_semana, hora_inicio, duracao_minutos,
+  });
+  if (temConflito) {
+    return res.status(422).json({ erro: 'Instrutor já tem aula cadastrada nesse horário' });
+  }
+
+  const aulaCriada = await aulasRepository.criar({
+    nome, instrutor_id, dia_semana, hora_inicio, duracao_minutos, capacidade_maxima,
+  });
+  res.status(201).location(`/aulas/${aulaCriada.id}`).json(aulaCriada);
+});
+
+router.patch('/:id', async (req, res) => {
+  const aulaExistente = await aulasRepository.buscarPorId(req.params.id);
+
+  if (!aulaExistente) {
+    return res.status(404).json({ erro: 'Aula não encontrada' });
+  }
+
+  const dadosAtualizados = {
+    nome: req.body.nome ?? aulaExistente.nome,
+    instrutor_id: req.body.instrutor_id ?? aulaExistente.instrutor_id,
+    dia_semana: req.body.dia_semana ?? aulaExistente.dia_semana,
+    hora_inicio: req.body.hora_inicio ?? aulaExistente.hora_inicio,
+    duracao_minutos: req.body.duracao_minutos ?? aulaExistente.duracao_minutos,
+    capacidade_maxima: req.body.capacidade_maxima ?? aulaExistente.capacidade_maxima,
+  };
+
+  const temConflito = await aulasRepository.existeConflito({
+    instrutor_id: dadosAtualizados.instrutor_id,
+    dia_semana: dadosAtualizados.dia_semana,
+    hora_inicio: dadosAtualizados.hora_inicio,
+    duracao_minutos: dadosAtualizados.duracao_minutos,
+    ignorarId: aulaExistente.id,
+  });
+
+  if (temConflito) {
+    return res.status(422).json({ erro: 'Instrutor já tem aula cadastrada nesse horário' });
+  }
+
+  const aulaAtualizada = await aulasRepository.atualizar(req.params.id, dadosAtualizados);
+  res.json(aulaAtualizada);
+});
+
+router.delete('/:id', async (req, res) => {
+  const aulaRemovida = await aulasRepository.remover(req.params.id);
+
+  if (!aulaRemovida) {
+    return res.status(404).json({ erro: 'Aula não encontrada' });
+  }
+
+  res.status(204).send();
+});
+
+module.exports = router;</code></pre>
+  <div class="rule">
+    <span class="tag">Por que DELETE de aula não precisa de try/catch</span>
+    <p>Diferente do instrutor, deletar uma aula <strong>não</strong> esbarra em restrição nenhuma — a tabela <code>matriculas</code> foi definida com <code>ON DELETE CASCADE</code> em <code>aula_id</code> (parte 3, seção 7): apagar a aula remove as matrículas dependentes automaticamente, sem bloquear. Duas tabelas, duas decisões de <code>ON DELETE</code> diferentes, dois comportamentos diferentes de API — a escolha feita no schema se reflete direto em quanto código de tratamento de erro cada rota precisa.</p>
+  </div>
+  <p><code>GET /aulas?instrutor_id=3</code> já aplica o filtro por query string (parte 3 da trilha API REST, seção 6) — <code>instrutor_id</code> não vira rota nova, é parâmetro sobre a mesma coleção.</p>
+
+  <h2 id="index-final">8. index.js final</h2>
+  <pre><code>// index.js
+require('dotenv').config();
+
+const express = require('express');
+
+const alunosRouter = require('./routes/alunos');
+const instrutoresRouter = require('./routes/instrutores');
+const aulasRouter = require('./routes/aulas');
+
+const app = express();
+
+app.use(express.json());
+
+app.use('/alunos', alunosRouter);
+app.use('/instrutores', instrutoresRouter);
+app.use('/aulas', aulasRouter);
+
+app.use((err, req, res, _next) => {
+  console.error(err);
+  res.status(500).json({ erro: 'Erro interno no servidor' });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Servidor rodando em http://localhost:${PORT}`);
+});</code></pre>
+  <p>Comparado à parte 4: o arquivo principal encolheu bastante — agora só monta as peças (routers) e cuida do que é realmente global (JSON parsing, tratamento de erro, subir o servidor). Cada entidade vive isolada no seu par rota/repository.</p>
+
+  <h2 id="testando">9. Testando tudo com curl</h2>
+  <pre><code># cria um instrutor
+curl -X POST http://localhost:3000/instrutores \
+  -H "Content-Type: application/json" \
+  -d '{"nome": "Carla Mendes", "especialidade": "yoga"}'
+# 201, guarda o id retornado (ex: 1)
+
+# cria uma aula pra esse instrutor
+curl -X POST http://localhost:3000/aulas \
+  -H "Content-Type: application/json" \
+  -d '{"nome": "Yoga matinal", "instrutor_id": 1, "dia_semana": "segunda", "hora_inicio": "07:00", "duracao_minutos": 60, "capacidade_maxima": 15}'
+# 201
+
+# tenta criar outra aula, mesmo instrutor, horário sobreposto -> Regra 3
+curl -X POST http://localhost:3000/aulas \
+  -H "Content-Type: application/json" \
+  -d '{"nome": "Yoga avançado", "instrutor_id": 1, "dia_semana": "segunda", "hora_inicio": "07:30", "duracao_minutos": 60, "capacidade_maxima": 10}'
+# 422 Unprocessable Entity — conflito de agenda
+
+# instrutor inexistente
+curl -X POST http://localhost:3000/aulas \
+  -H "Content-Type: application/json" \
+  -d '{"nome": "Spinning", "instrutor_id": 999, "dia_semana": "terca", "hora_inicio": "18:00", "duracao_minutos": 45, "capacidade_maxima": 20}'
+# 422 — instrutor_id não existe
+
+# filtra aulas por instrutor
+curl "http://localhost:3000/aulas?instrutor_id=1"
+
+# busca aula inexistente
+curl http://localhost:3000/aulas/999
+# 404
+
+# tenta remover instrutor que já tem aula -> bloqueado
+curl -X DELETE http://localhost:3000/instrutores/1
+# 409 Conflict
+
+# atualiza só a especialidade, mantém o nome
+curl -X PATCH http://localhost:3000/instrutores/1 \
+  -H "Content-Type: application/json" \
+  -d '{"especialidade": "yoga avançado"}'
+# 200, nome continua "Carla Mendes"</code></pre>
+
+  <h2 id="erros-comuns">10. Erros comuns</h2>
+  <ol>
+    <li><strong>Esquecer de exportar o router</strong> (<code>module.exports = router</code>) — <code>index.js</code> recebe <code>undefined</code> no lugar do router, <code>app.use('/alunos', undefined)</code> lança erro na inicialização.</li>
+    <li><strong>Montar o router com prefixo errado</strong> — se em <code>routes/aulas.js</code> você escrever <code>router.get('/aulas', ...)</code> (repetindo o prefixo) e ainda montar com <code>app.use('/aulas', aulasRouter)</code> no <code>index.js</code>, a rota final vira <code>/aulas/aulas</code> por engano. Dentro do arquivo de rota, os caminhos são sempre <strong>relativos</strong> ao prefixo já montado.</li>
+    <li><strong>Passar <code>undefined</code> em vez de <code>null</code> num parâmetro de query</strong> — biblioteca <code>pg</code> lança erro imediatamente. Ver aviso da seção 6.</li>
+    <li><strong>Esquecer o <code>::time</code>/<code>::int</code> nos parâmetros do <code>OVERLAPS</code></strong> — sem o <em>cast</em> explícito, o Postgres às vezes não consegue inferir o tipo do parâmetro (<code>$3</code>, <code>$4</code>) sozinho, e a query falha com erro de tipo ambíguo.</li>
+    <li><strong>Confundir <code>422</code> com <code>400</code></strong> — campo ausente/mal formatado é <code>400</code> (seção 6 da parte 2 da trilha API REST); dado com formato certo mas que viola regra de negócio (conflito de agenda, instrutor inexistente) é <code>422</code>. As rotas desta parte já seguem essa distinção.</li>
+  </ol>
+
+  <h2 id="proximos-passos">11. O que vem a seguir</h2>
+  <p>Com Aluno, Instrutor e Aula todos com CRUD completo, falta a peça mais rica do projeto: a Matrícula, que liga tudo.</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Matrícula e suas regras</strong>: Regra 1 (capacidade máxima, validada no código, contando matrículas confirmadas), Regra 2 (já resolvida pelo índice único parcial do banco, parte 3), Regra 4 (cancelamento via <code>PATCH</code> de status, nunca <code>DELETE</code>).</li>
+      <li><strong>Autenticação</strong>: login de aluno, proteção das rotas de matrícula.</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Refatorar em camadas dá trabalho uma vez e paga o resto do projeto — repara como <code>aulas</code>, a entidade mais complexa até agora, ficou isolada num par de arquivos, sem misturar com a lógica de <code>instrutores</code> ou <code>alunos</code>. Quando terminar de testar, volta com dúvidas — principalmente se o <code>OVERLAPS</code> se comportar diferente do esperado em algum horário testado manualmente.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

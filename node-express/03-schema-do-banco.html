@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Schema do banco de dados</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="02-projeto-academia.html">&larr; 2. Projeto: API de uma academia</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#por-que-schema-primeiro">1. Por que o schema vem antes do código</a></li>
+    <li><a href="#conceitos-sql">2. Conceitos de SQL que vamos usar</a></li>
+    <li><a href="#ordem-criacao">3. Ordem de criação importa</a></li>
+    <li><a href="#tabela-instrutores">4. Tabela instrutores</a></li>
+    <li><a href="#tabela-alunos">5. Tabela alunos</a></li>
+    <li><a href="#tabela-aulas">6. Tabela aulas</a></li>
+    <li><a href="#tabela-matriculas">7. Tabela matriculas</a></li>
+    <li><a href="#regra-2-indice-parcial">8. A Regra 2 e o índice único parcial</a></li>
+    <li><a href="#o-que-o-banco-nao-garante">9. O que o banco não garante sozinho</a></li>
+    <li><a href="#script-completo">10. Script completo</a></li>
+    <li><a href="#executando">11. Executando o script</a></li>
+    <li><a href="#verificando">12. Verificando o resultado</a></li>
+    <li><a href="#erros-comuns">13. Erros comuns</a></li>
+    <li><a href="#proximos-passos">14. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="04-primeiro-endpoint-funcional.html">4. Primeiro endpoint funcional &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 3</div>
+  <h1>Schema do banco de dados</h1>
+  <p class="subtitle">A parte 2 definiu as entidades do projeto (Aluno, Instrutor, Aula, Matrícula) e como se relacionam. Agora essas entidades viram <strong>tabelas de verdade</strong> no Postgres, com os tipos de dado e as restrições certas — antes de qualquer linha de Express ser escrita.</p>
+
+  <h2 id="por-que-schema-primeiro">1. Por que o schema vem antes do código</h2>
+  <p>Um endpoint como <code>GET /alunos</code> precisa consultar uma tabela <code>alunos</code> que já existe. Sem o schema criado, não tem o que consultar — o código do Express ficaria tentando conversar com uma tabela inexistente. Por isso a ordem: <strong>modelo do negócio (parte 2) → schema no banco (aqui) → código que usa esse schema (próxima parte)</strong>.</p>
+  <p>Vale também entender uma distinção: o <strong>schema</strong> é a estrutura (quais tabelas, quais colunas, quais regras o banco garante sozinho). Os <strong>dados</strong> são o conteúdo que vai entrar nessas tabelas depois, através da API. Este documento cria só a estrutura — tabelas vão nascer vazias.</p>
+
+  <h2 id="conceitos-sql">2. Conceitos de SQL que vamos usar</h2>
+  <p>Antes do script completo, vale entender cada peça isoladamente — é isso que faz o SQL parecer menos "mágico" depois.</p>
+
+  <h3><code>CREATE TABLE</code></h3>
+  <p>Comando que cria uma tabela nova, declarando cada coluna com seu tipo:</p>
+  <pre><code>CREATE TABLE nome_da_tabela (
+  coluna1 TIPO restrições,
+  coluna2 TIPO restrições
+);</code></pre>
+
+  <h3>Tipos de dado principais que vamos usar</h3>
+  <table>
+    <thead><tr><th>Tipo</th><th>Guarda</th></tr></thead>
+    <tbody>
+      <tr><td><code>SERIAL</code></td><td>Número inteiro que <strong>o próprio banco gera automaticamente</strong>, incrementando a cada linha nova (1, 2, 3...). Uso clássico: chave primária.</td></tr>
+      <tr><td><code>VARCHAR(n)</code></td><td>Texto curto, com limite máximo de <code>n</code> caracteres (ex: <code>VARCHAR(120)</code> pra nome).</td></tr>
+      <tr><td><code>INTEGER</code></td><td>Número inteiro comum (sem geração automática).</td></tr>
+      <tr><td><code>DATE</code></td><td>Só data (ano-mês-dia), sem hora.</td></tr>
+      <tr><td><code>TIME</code></td><td>Só hora (hora:minuto:segundo), sem data.</td></tr>
+      <tr><td><code>TIMESTAMP</code></td><td>Data e hora juntas — usado pra "quando esse registro foi criado".</td></tr>
+    </tbody>
+  </table>
+
+  <h3><code>PRIMARY KEY</code> — chave primária</h3>
+  <p>Marca a coluna que identifica <strong>unicamente</strong> cada linha da tabela — equivalente ao <code>id</code> que você já vem usando nas URIs desde a parte 3 da trilha API REST (<code>/alunos/42</code> — esse <code>42</code> é a chave primária do aluno).</p>
+
+  <h3><code>NOT NULL</code></h3>
+  <p>Impede que a coluna fique vazia. Sem isso, o Postgres aceita gravar a linha mesmo faltando aquele dado — e "esquecer" de validar isso no código vira um bug silencioso. Colocar <code>NOT NULL</code> no schema é uma segunda linha de defesa, além da validação de forma que a API vai fazer (parte 5 da trilha API REST).</p>
+
+  <h3><code>UNIQUE</code></h3>
+  <p>Garante que nenhuma outra linha da tabela pode repetir aquele valor. Vamos usar em <code>email</code> do aluno — duas contas com o mesmo e-mail não deveriam existir.</p>
+
+  <h3><code>FOREIGN KEY</code> / <code>REFERENCES</code> — chave estrangeira</h3>
+  <p>É como o banco representa o relacionamento entre tabelas (seção 4 da parte 2 do projeto). Uma coluna que guarda o <code>id</code> de uma linha de <em>outra</em> tabela, com uma trava: o banco não deixa você gravar um <code>instrutor_id</code> que não existe na tabela <code>instrutores</code>.</p>
+  <pre><code>instrutor_id INTEGER NOT NULL REFERENCES instrutores(id)</code></pre>
+  <p>E o que acontece se alguém tentar <strong>apagar</strong> um instrutor que já tem aulas vinculadas? É isso que a cláusula <code>ON DELETE</code> decide:</p>
+  <table>
+    <thead><tr><th>Opção</th><th>Comportamento</th></tr></thead>
+    <tbody>
+      <tr><td><code>ON DELETE CASCADE</code></td><td>Apaga também todas as linhas dependentes automaticamente</td></tr>
+      <tr><td><code>ON DELETE RESTRICT</code></td><td>Bloqueia a exclusão enquanto existir algo dependente — erro, não deixa apagar</td></tr>
+    </tbody>
+  </table>
+  <p>Vamos usar as duas, com intenção diferente em cada relação — detalhe explicado tabela por tabela adiante.</p>
+
+  <h3><code>CHECK</code></h3>
+  <p>Restrição customizada — uma condição que precisa ser verdadeira pra linha ser aceita. Exemplo: capacidade de uma aula não faz sentido ser zero ou negativa:</p>
+  <pre><code>capacidade_maxima INTEGER NOT NULL CHECK (capacidade_maxima > 0)</code></pre>
+
+  <h3><code>DEFAULT</code></h3>
+  <p>Valor usado automaticamente quando a coluna não é informada. Vamos usar pra data de criação (<code>NOW()</code>, a hora atual do banco) e pro status inicial de uma matrícula (<code>'confirmada'</code>).</p>
+
+  <h2 id="ordem-criacao">3. Ordem de criação importa</h2>
+  <p>Uma <code>FOREIGN KEY</code> só pode apontar pra uma tabela que <strong>já existe</strong>. Como <code>aulas</code> referencia <code>instrutores</code>, e <code>matriculas</code> referencia tanto <code>alunos</code> quanto <code>aulas</code>, a ordem de criação segue a dependência:</p>
+  <pre><code>1. instrutores   (não depende de ninguém)
+2. alunos        (não depende de ninguém)
+3. aulas         (depende de instrutores)
+4. matriculas    (depende de alunos e aulas)</code></pre>
+
+  <h2 id="tabela-instrutores">4. Tabela <code>instrutores</code></h2>
+  <div class="table-card">
+    <h3>instrutores</h3>
+    <pre><code>CREATE TABLE IF NOT EXISTS instrutores (
+  id SERIAL PRIMARY KEY,
+  nome VARCHAR(120) NOT NULL,
+  especialidade VARCHAR(80) NOT NULL
+);</code></pre>
+    <p>Tabela mais simples do projeto — nenhuma chave estrangeira, nenhuma regra especial. <code>id</code> gerado automaticamente pelo <code>SERIAL</code>.</p>
+  </div>
+
+  <h2 id="tabela-alunos">5. Tabela <code>alunos</code></h2>
+  <div class="table-card">
+    <h3>alunos</h3>
+    <pre><code>CREATE TABLE IF NOT EXISTS alunos (
+  id SERIAL PRIMARY KEY,
+  nome VARCHAR(120) NOT NULL,
+  email VARCHAR(160) NOT NULL UNIQUE,
+  data_nascimento DATE NOT NULL,
+  criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+);</code></pre>
+    <p><code>email UNIQUE</code> aplica a regra "não pode ter duas contas com o mesmo e-mail" direto no banco — mesmo que a validação de forma da API (parte 5) falhe por algum bug, o banco recusa a segunda linha duplicada. Duas camadas de defesa pro mesmo problema, uma nunca substitui a outra.</p>
+  </div>
+
+  <h2 id="tabela-aulas">6. Tabela <code>aulas</code></h2>
+  <div class="table-card">
+    <h3>aulas</h3>
+    <pre><code>CREATE TABLE IF NOT EXISTS aulas (
+  id SERIAL PRIMARY KEY,
+  nome VARCHAR(120) NOT NULL,
+  instrutor_id INTEGER NOT NULL REFERENCES instrutores(id) ON DELETE RESTRICT,
+  dia_semana VARCHAR(10) NOT NULL
+    CHECK (dia_semana IN ('segunda','terca','quarta','quinta','sexta','sabado','domingo')),
+  hora_inicio TIME NOT NULL,
+  duracao_minutos INTEGER NOT NULL CHECK (duracao_minutos > 0),
+  capacidade_maxima INTEGER NOT NULL CHECK (capacidade_maxima > 0)
+);</code></pre>
+    <div class="rule">
+      <span class="tag">Por que ON DELETE RESTRICT aqui</span>
+      <p>Se alguém tentar apagar um instrutor que ainda dá aulas, o banco <strong>recusa</strong> a exclusão. Decisão intencional: apagar o instrutor não deveria fazer as aulas dele desaparecerem silenciosamente (isso afetaria alunos matriculados sem aviso). Forçar um erro aqui obriga quem estiver operando o sistema a decidir explicitamente o que fazer com as aulas primeiro — reatribuir a outro instrutor, cancelar, etc. Isso é uma decisão de negócio sendo expressa como restrição de banco.</p>
+    </div>
+    <p>O <code>CHECK</code> em <code>dia_semana</code> funciona como uma lista fixa de valores permitidos — o banco recusa qualquer string que não esteja nessa lista, similar a um <em>enum</em> em outras linguagens (Postgres tem um tipo <code>ENUM</code> nativo também, mas <code>CHECK</code> com lista é mais simples de ler e alterar pra quem está começando).</p>
+  </div>
+
+  <h2 id="tabela-matriculas">7. Tabela <code>matriculas</code></h2>
+  <div class="table-card">
+    <h3>matriculas</h3>
+    <pre><code>CREATE TABLE IF NOT EXISTS matriculas (
+  id SERIAL PRIMARY KEY,
+  aluno_id INTEGER NOT NULL REFERENCES alunos(id) ON DELETE CASCADE,
+  aula_id INTEGER NOT NULL REFERENCES aulas(id) ON DELETE CASCADE,
+  status VARCHAR(10) NOT NULL DEFAULT 'confirmada'
+    CHECK (status IN ('confirmada','cancelada')),
+  criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+);</code></pre>
+    <div class="rule">
+      <span class="tag">Por que ON DELETE CASCADE aqui, diferente de aulas</span>
+      <p>Uma matrícula <strong>não tem sentido nenhum</strong> sem o aluno ou a aula que ela liga — ao contrário do instrutor (que continua existindo/fazendo sentido mesmo se uma aula for removida), uma matrícula órfã é só lixo no banco. Por isso aqui a exclusão em cascata é o comportamento certo: apagar um aluno remove as matrículas dele junto, sem precisar de um passo manual extra.</p>
+    </div>
+    <p><code>status</code> com <code>DEFAULT 'confirmada'</code>: toda matrícula nasce confirmada; vira <code>'cancelada'</code> só através de um <code>PATCH</code> explícito (Regra 4 do projeto, parte 2) — nunca apagada de verdade, o que preserva o histórico.</p>
+  </div>
+
+  <h2 id="regra-2-indice-parcial">8. A Regra 2 e o índice único parcial</h2>
+  <p>A Regra 2 do projeto diz: <em>"um aluno não pode ter duas matrículas <code>confirmada</code> na mesma aula ao mesmo tempo"</em>. Primeira tentação: um <code>UNIQUE</code> simples nas duas colunas:</p>
+  <pre><code>-- NÃO faz isso:
+UNIQUE (aluno_id, aula_id)</code></pre>
+  <p>Problema: isso bloquearia até o cenário <strong>válido</strong> de "aluno se matriculou, cancelou, e quer se matricular de novo na mesma aula depois". Com <code>UNIQUE</code> simples, a segunda matrícula (mesmo sendo uma tentativa legítima, depois do cancelamento) seria rejeitada só por já existir uma linha antiga com esse par <code>aluno_id</code>/<code>aula_id</code> — mesmo essa linha antiga estando <code>cancelada</code>.</p>
+  <p>A solução é um <strong>índice único parcial</strong> (<em>partial unique index</em>) — um <code>UNIQUE</code> que só se aplica às linhas que passam numa condição <code>WHERE</code>:</p>
+  <pre><code>CREATE UNIQUE INDEX matriculas_aluno_aula_confirmada_idx
+  ON matriculas (aluno_id, aula_id)
+  WHERE status = 'confirmada';</code></pre>
+  <p>Com isso, o banco garante unicidade <strong>só entre as linhas <code>confirmada</code></strong>. Duas linhas <code>cancelada</code> com o mesmo par podem coexistir sem problema (histórico de tentativas antigas), mas nunca duas <code>confirmada</code> ao mesmo tempo. A Regra 2 inteira, garantida pelo banco, sem precisar de uma consulta extra no código pra checar duplicidade antes de inserir.</p>
+  <div class="callout"><p>Isso é diferente das Regras 1 e 3 (capacidade máxima da aula, conflito de agenda do instrutor) — ver seção 9. A diferença é o que torna esse índice parcial um caso interessante de estudar: nem toda regra de negócio vira restrição de banco tão elegante quanto essa.</p></div>
+
+  <h2 id="o-que-o-banco-nao-garante">9. O que o banco não garante sozinho</h2>
+  <p>Vale deixar explícito, pra não achar que o schema resolve tudo:</p>
+  <table>
+    <thead><tr><th>Regra (parte 2 do projeto)</th><th>O banco garante sozinho?</th><th>Onde vai ser aplicada</th></tr></thead>
+    <tbody>
+      <tr><td>Regra 1 — Capacidade máxima da aula</td><td>Não</td><td>Código da API: contar matrículas <code>confirmada</code> da aula antes de inserir uma nova</td></tr>
+      <tr><td>Regra 2 — Matrícula duplicada</td><td><strong>Sim</strong></td><td>Índice único parcial, seção 8</td></tr>
+      <tr><td>Regra 3 — Conflito de agenda do instrutor</td><td>Não</td><td>Código da API: comparar <code>dia_semana</code>/<code>hora_inicio</code>/<code>duracao_minutos</code> das aulas do mesmo instrutor</td></tr>
+      <tr><td>Regra 4 — Cancelamento não apaga registro</td><td>Parcialmente</td><td><code>CHECK</code> garante que <code>status</code> só aceita os dois valores válidos; a lógica de "usar <code>PATCH</code>, nunca <code>DELETE</code>" é responsabilidade do código da API</td></tr>
+    </tbody>
+  </table>
+  <p>Regras 1 e 3 exigem <strong>contar ou comparar várias linhas</strong> — coisa que dá pra fazer em SQL puro (com sub-consultas ou <em>triggers</em>), mas nesse estágio de aprendizado fica mais claro implementar na camada de lógica de negócio (parte 5 da trilha API REST, seção 2) do próximo material. O schema faz a parte que faz sentido pra ele: estrutura, tipos, e as restrições simples o bastante pra não precisar de lógica de aplicação.</p>
+
+  <h2 id="script-completo">10. Script completo</h2>
+  <p>Junta tudo, na ordem certa, num arquivo <code>db/schema.sql</code> dentro da pasta do projeto (a mesma <code>minha-api/</code> do guia de ambiente):</p>
+  <pre><code>-- db/schema.sql
+
+CREATE TABLE IF NOT EXISTS instrutores (
+  id SERIAL PRIMARY KEY,
+  nome VARCHAR(120) NOT NULL,
+  especialidade VARCHAR(80) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS alunos (
+  id SERIAL PRIMARY KEY,
+  nome VARCHAR(120) NOT NULL,
+  email VARCHAR(160) NOT NULL UNIQUE,
+  data_nascimento DATE NOT NULL,
+  criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS aulas (
+  id SERIAL PRIMARY KEY,
+  nome VARCHAR(120) NOT NULL,
+  instrutor_id INTEGER NOT NULL REFERENCES instrutores(id) ON DELETE RESTRICT,
+  dia_semana VARCHAR(10) NOT NULL
+    CHECK (dia_semana IN ('segunda','terca','quarta','quinta','sexta','sabado','domingo')),
+  hora_inicio TIME NOT NULL,
+  duracao_minutos INTEGER NOT NULL CHECK (duracao_minutos > 0),
+  capacidade_maxima INTEGER NOT NULL CHECK (capacidade_maxima > 0)
+);
+
+CREATE TABLE IF NOT EXISTS matriculas (
+  id SERIAL PRIMARY KEY,
+  aluno_id INTEGER NOT NULL REFERENCES alunos(id) ON DELETE CASCADE,
+  aula_id INTEGER NOT NULL REFERENCES aulas(id) ON DELETE CASCADE,
+  status VARCHAR(10) NOT NULL DEFAULT 'confirmada'
+    CHECK (status IN ('confirmada','cancelada')),
+  criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS matriculas_aluno_aula_confirmada_idx
+  ON matriculas (aluno_id, aula_id)
+  WHERE status = 'confirmada';</code></pre>
+  <p>O <code>IF NOT EXISTS</code> em cada <code>CREATE</code> torna o script seguro de rodar mais de uma vez — se a tabela já existir, o comando é ignorado em vez de dar erro. Útil enquanto o schema ainda está em desenvolvimento e você roda o script várias vezes testando ajustes.</p>
+
+  <h2 id="executando">11. Executando o script</h2>
+  <p>Com o Postgres já no ar (<code>docker compose up -d</code>, do guia de ambiente), duas formas de rodar:</p>
+  <h3>Via terminal, direto no container</h3>
+  <pre><code>docker compose exec -T db psql -U postgres -d estudo < db/schema.sql</code></pre>
+  <p>O <code>-T</code> desativa alocação de terminal interativo — necessário porque estamos redirecionando um arquivo (<code>&lt;</code>) pra dentro do comando, não digitando na hora.</p>
+  <h3>Via DBeaver</h3>
+  <p>Abre a conexão <code>estudo</code> configurada anteriormente, cria um novo editor SQL (<strong>SQL Editor &rarr; New SQL Script</strong>), cola o conteúdo do <code>schema.sql</code>, e executa o script inteiro (<strong>Execute SQL Script</strong>, ou <code>Alt+X</code>) — diferente de "executar só a linha atual" (<code>Ctrl+Enter</code>), que rodaria apenas o primeiro comando.</p>
+
+  <h2 id="verificando">12. Verificando o resultado</h2>
+  <p>Pelo terminal:</p>
+  <pre><code>docker compose exec db psql -U postgres -d estudo
+
+-- dentro do psql:
+\dt              -- lista todas as tabelas
+\d alunos        -- mostra colunas, tipos e restrições da tabela alunos
+\d matriculas    -- mostra colunas, tipos, restrições E os índices (inclusive o parcial)</code></pre>
+  <p>Pelo DBeaver: atualiza a conexão (botão de refresh ou <code>F5</code> na árvore lateral), expande <strong>estudo &rarr; Schemas &rarr; public &rarr; Tables</strong> — as 4 tabelas devem aparecer, todas vazias.</p>
+
+  <h2 id="erros-comuns">13. Erros comuns</h2>
+  <ol>
+    <li><strong>"relation does not exist"</strong> ao criar <code>aulas</code> — normalmente significa que <code>instrutores</code> ainda não existe. Confirma a ordem de execução (seção 3).</li>
+    <li><strong>Rodar o script mais de uma vez sem <code>IF NOT EXISTS</code></strong> — dá erro "relation already exists" na segunda vez. O script deste guia já vem protegido, mas vale entender o motivo se aparecer em outro contexto.</li>
+    <li><strong>Confundir <code>UNIQUE</code> simples com o índice único parcial</strong> — ver seção 8. Sintoma do erro: sistema recusa uma matrícula legítima depois de um cancelamento anterior.</li>
+    <li><strong>Esquecer <code>NOT NULL</code> num campo obrigatório</strong> — a tabela aceita a linha mesmo faltando dado, e o problema só aparece bem depois, quando o código tentar usar aquele campo e encontrar <code>null</code> onde não esperava.</li>
+  </ol>
+
+  <h2 id="proximos-passos">14. O que vem a seguir</h2>
+  <p>Com as 4 tabelas criadas e verificadas, o próximo material sai do SQL puro e volta pro Express — a primeira conexão de verdade entre código e banco.</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Primeiro endpoint funcional</strong>: servidor Express de pé, conexão com Postgres via <code>pg</code>, implementando <code>GET /alunos</code> e <code>POST /alunos</code> contra as tabelas criadas aqui.</li>
+      <li><strong>CRUD completo</strong> das demais entidades, aplicando as Regras 1 e 3 no código (a parte que o schema não resolveu sozinho, seção 9).</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Quando terminar de rodar e verificar o script, volte com dúvidas — principalmente se algum <code>CHECK</code> ou <code>REFERENCES</code> se comportar diferente do esperado ao testar inserções manuais no <code>psql</code> ou DBeaver antes de ir pro código.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

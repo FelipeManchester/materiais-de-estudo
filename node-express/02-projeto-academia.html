@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Projeto: API de uma academia</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="01-node-express.html">&larr; 1. Configurando o ambiente</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-negocio">1. O negócio: Studio Fit</a></li>
+    <li><a href="#escopo">2. Escopo: o que entra e o que fica de fora</a></li>
+    <li><a href="#entidades">3. Entidades (recursos)</a></li>
+    <li><a href="#relacionamentos">4. Como as entidades se relacionam</a></li>
+    <li><a href="#regras-negocio">5. Regras de negócio</a></li>
+    <li><a href="#mapa-endpoints">6. Mapa de endpoints</a></li>
+    <li><a href="#validacoes">7. Validações por entidade</a></li>
+    <li><a href="#autenticacao-prevista">8. Autenticação (prevista, não agora)</a></li>
+    <li><a href="#como-usar-este-documento">9. Como usar este documento</a></li>
+    <li><a href="#proximos-passos">10. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="03-schema-do-banco.html">3. Schema do banco de dados &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto — Trilha Node + Express</div>
+  <h1>Projeto: API de uma academia</h1>
+  <p class="subtitle">Domínio fictício pra dar contexto real aos próximos materiais da trilha. Em vez de rotas soltas sem propósito, toda implementação daqui pra frente serve pra construir a API de uma academia: alunos se matriculando em aulas, com regras de negócio de verdade — mas <strong>de propósito mantidas pequenas</strong>, pra não competir com o foco real, que é aprender REST + Node, não desenhar um sistema de gestão de academia completo.</p>
+
+  <h2 id="o-negocio">1. O negócio: Studio Fit</h2>
+  <p><strong>Studio Fit</strong> é uma academia fictícia de porte pequeno/médio, que oferece aulas em turma (não musculação livre) — tipo spinning, yoga, funcional. Cada aula tem um instrutor responsável, um horário fixo e um número limitado de vagas. Alunos se matriculam nas aulas que quiserem, respeitando a vaga disponível.</p>
+  <p>Esse recorte (aula em turma com vaga limitada) foi escolhido de propósito: gera regras de negócio reais — conflito de horário, capacidade máxima, matrícula duplicada — sem precisar entrar em assunto complexo como plano de assinatura, cobrança ou múltiplas unidades.</p>
+
+  <h2 id="escopo">2. Escopo: o que entra e o que fica de fora</h2>
+  <p>Delimitar isso agora evita que o domínio cresça sozinho no meio da implementação — o problema descrito no início da conversa que gerou este documento.</p>
+  <div class="scope-grid">
+    <div class="in">
+      <h4>Entra</h4>
+      <ul>
+        <li>Cadastro de alunos e instrutores</li>
+        <li>Cadastro de aulas (horário, capacidade, instrutor responsável)</li>
+        <li>Matrícula de aluno numa aula, com limite de vaga</li>
+        <li>Cancelamento de matrícula</li>
+        <li>Consulta: aulas de um aluno, alunos de uma aula</li>
+        <li>Autenticação básica (prevista pra próxima parte da trilha)</li>
+      </ul>
+    </div>
+    <div class="out">
+      <h4>Fica de fora</h4>
+      <ul>
+        <li>Pagamento, mensalidade, plano de assinatura</li>
+        <li>Múltiplas unidades/filiais</li>
+        <li>Avaliação física, histórico de evolução do aluno</li>
+        <li>Folha de pagamento / contrato de instrutor</li>
+        <li>Notificação (e-mail, SMS, push)</li>
+        <li>Musculação livre / check-in de catraca</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout"><p>Se em algum momento bater vontade de adicionar algo da lista "fica de fora": resista. Esses itens não ensinam nenhum conceito novo de REST que os itens já incluídos não ensinem — só aumentam a superfície de modelagem de negócio.</p></div>
+
+  <h2 id="entidades">3. Entidades (recursos)</h2>
+
+  <div class="entity-card">
+    <h3>Aluno</h3>
+    <div class="meta">Recurso de topo — <code>/alunos</code></div>
+    <p>Campos: <code>id</code>, <code>nome</code>, <code>email</code> (único), <code>data_nascimento</code>, <code>criado_em</code>.</p>
+  </div>
+
+  <div class="entity-card">
+    <h3>Instrutor</h3>
+    <div class="meta">Recurso de topo — <code>/instrutores</code></div>
+    <p>Campos: <code>id</code>, <code>nome</code>, <code>especialidade</code> (ex: "yoga", "spinning").</p>
+  </div>
+
+  <div class="entity-card">
+    <h3>Aula</h3>
+    <div class="meta">Recurso de topo — <code>/aulas</code></div>
+    <p>Campos: <code>id</code>, <code>nome</code> (ex: "Spinning matinal"), <code>instrutor_id</code>, <code>horario</code> (dia da semana + hora), <code>duracao_minutos</code>, <code>capacidade_maxima</code>.</p>
+  </div>
+
+  <div class="entity-card">
+    <h3>Matrícula</h3>
+    <div class="meta">Recurso aninhado — só existe no contexto de uma aula, ver seção 4 da parte 3 da trilha API REST</div>
+    <p>Campos: <code>id</code>, <code>aluno_id</code>, <code>aula_id</code>, <code>status</code> (<code>confirmada</code> ou <code>cancelada</code>), <code>criado_em</code>. Representa o vínculo entre um aluno e uma aula — a entidade que só existe porque as outras duas existem.</p>
+  </div>
+
+  <h2 id="relacionamentos">4. Como as entidades se relacionam</h2>
+  <pre><code>Instrutor 1 ----&lt; N  Aula
+                        |
+                        | 1
+                        |
+                        N
+                     Matrícula
+                        N
+                        |
+                        | 1
+                        |
+                     Aluno</code></pre>
+  <ul>
+    <li>Um <strong>instrutor</strong> dá várias <strong>aulas</strong>; cada aula tem um único instrutor responsável.</li>
+    <li>Uma <strong>aula</strong> tem várias <strong>matrículas</strong> (até o limite da capacidade); cada matrícula pertence a uma única aula.</li>
+    <li>Um <strong>aluno</strong> tem várias <strong>matrículas</strong> (em aulas diferentes); cada matrícula pertence a um único aluno.</li>
+  </ul>
+  <p><strong>Matrícula</strong> é o que se costuma chamar de <em>tabela de associação</em>: existe pra representar a relação muitos-pra-muitos entre aluno e aula (um aluno em várias aulas, uma aula com vários alunos), carregando informação própria (o <code>status</code>).</p>
+
+  <h2 id="regras-negocio">5. Regras de negócio</h2>
+  <p>Só as regras necessárias pra gerar casos reais de validação/erro HTTP — nada além disso, de propósito.</p>
+
+  <div class="rule">
+    <span class="tag">Regra 1 — Capacidade máxima</span>
+    <p>Uma matrícula só pode ser criada se o número de matrículas <code>confirmada</code> na aula for menor que <code>capacidade_maxima</code>. Se a aula estiver lotada, a tentativa de matrícula deve falhar com <code>409 Conflict</code> (a requisição conflita com o estado atual do recurso — visto na parte 2 da trilha API REST).</p>
+  </div>
+
+  <div class="rule">
+    <span class="tag">Regra 2 — Matrícula duplicada</span>
+    <p>Um aluno não pode ter duas matrículas <code>confirmada</code> na mesma aula ao mesmo tempo. Tentar matricular de novo devolve <code>409 Conflict</code>.</p>
+  </div>
+
+  <div class="rule">
+    <span class="tag">Regra 3 — Conflito de agenda do instrutor</span>
+    <p>Um instrutor não pode ter duas aulas cadastradas no mesmo horário. Validação acontece na criação/edição da aula, devolve <code>422 Unprocessable Entity</code> (dado sintaticamente válido, mas semanticamente inconsistente com o resto do sistema).</p>
+  </div>
+
+  <div class="rule">
+    <span class="tag">Regra 4 — Cancelamento é mudança de status, não exclusão</span>
+    <p>Cancelar uma matrícula não apaga o registro do banco — muda <code>status</code> para <code>cancelada</code>. Isso preserva histórico (quem já foi matriculado em quê) e é o que abre vaga de novo na aula pra Regra 1. Na prática de API, isso é feito com <code>PATCH</code> no recurso de matrícula, não <code>DELETE</code>.</p>
+  </div>
+
+  <h2 id="mapa-endpoints">6. Mapa de endpoints</h2>
+  <p>Aplicando as convenções da parte 3 da trilha API REST (recursos no plural, aninhamento de 1 nível, ações via sub-recurso quando necessário):</p>
+  <table>
+    <thead><tr><th>Método</th><th>URI</th><th>O que faz</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET</code></td><td><code>/alunos</code></td><td>Lista alunos</td></tr>
+      <tr><td><code>POST</code></td><td><code>/alunos</code></td><td>Cria aluno</td></tr>
+      <tr><td><code>GET</code></td><td><code>/alunos/:id</code></td><td>Busca um aluno</td></tr>
+      <tr><td><code>PATCH</code></td><td><code>/alunos/:id</code></td><td>Atualiza dados do aluno</td></tr>
+      <tr><td><code>DELETE</code></td><td><code>/alunos/:id</code></td><td>Remove aluno</td></tr>
+      <tr><td><code>GET</code></td><td><code>/alunos/:id/matriculas</code></td><td>Lista as aulas em que o aluno está matriculado</td></tr>
+      <tr><td><code>GET</code></td><td><code>/instrutores</code></td><td>Lista instrutores</td></tr>
+      <tr><td><code>POST</code></td><td><code>/instrutores</code></td><td>Cria instrutor</td></tr>
+      <tr><td><code>GET</code></td><td><code>/instrutores/:id</code></td><td>Busca um instrutor</td></tr>
+      <tr><td><code>GET</code></td><td><code>/aulas</code></td><td>Lista aulas (filtros: <code>?instrutor_id=</code>, parte 3 da trilha API REST)</td></tr>
+      <tr><td><code>POST</code></td><td><code>/aulas</code></td><td>Cria aula (valida Regra 3)</td></tr>
+      <tr><td><code>GET</code></td><td><code>/aulas/:id</code></td><td>Busca uma aula</td></tr>
+      <tr><td><code>PATCH</code></td><td><code>/aulas/:id</code></td><td>Atualiza aula (valida Regra 3 de novo, se horário mudar)</td></tr>
+      <tr><td><code>DELETE</code></td><td><code>/aulas/:id</code></td><td>Remove aula</td></tr>
+      <tr><td><code>GET</code></td><td><code>/aulas/:id/matriculas</code></td><td>Lista alunos matriculados nessa aula</td></tr>
+      <tr><td><code>POST</code></td><td><code>/aulas/:id/matriculas</code></td><td>Matricula um aluno (body: <code>aluno_id</code>) — valida Regras 1 e 2</td></tr>
+      <tr><td><code>PATCH</code></td><td><code>/aulas/:id/matriculas/:matriculaId</code></td><td>Cancela a matrícula (Regra 4) — body: <code>{"status": "cancelada"}</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="validacoes">7. Validações por entidade</h2>
+  <p>Retomando a distinção da parte 5 da trilha API REST — validação de <strong>forma</strong> (schema) acontece antes de qualquer regra de negócio da seção 5:</p>
+  <table>
+    <thead><tr><th>Entidade</th><th>Validação de forma esperada</th></tr></thead>
+    <tbody>
+      <tr><td>Aluno</td><td><code>nome</code> obrigatório; <code>email</code> obrigatório, formato válido, único no sistema; <code>data_nascimento</code> data válida</td></tr>
+      <tr><td>Instrutor</td><td><code>nome</code> obrigatório; <code>especialidade</code> obrigatória</td></tr>
+      <tr><td>Aula</td><td><code>nome</code> obrigatório; <code>instrutor_id</code> obrigatório e precisa existir; <code>capacidade_maxima</code> inteiro positivo; <code>duracao_minutos</code> inteiro positivo</td></tr>
+      <tr><td>Matrícula</td><td><code>aluno_id</code> obrigatório e precisa existir; <code>status</code>, quando enviado, só pode ser <code>confirmada</code> ou <code>cancelada</code></td></tr>
+    </tbody>
+  </table>
+  <p>Erro de validação de forma → <code>400 Bad Request</code>. Regra de negócio da seção 5 quebrada → <code>409</code> ou <code>422</code>, conforme já especificado em cada regra.</p>
+
+  <h2 id="autenticacao-prevista">8. Autenticação (prevista, não agora)</h2>
+  <p>Ainda não implementada nesta fase — fica planejada aqui só pra próxima parte da trilha já ter contexto pronto:</p>
+  <ul>
+    <li>Aluno se autentica pra ver/cancelar as próprias matrículas.</li>
+    <li>Instrutor não precisa de login neste escopo (cadastro de instrutor é feito por quem administra o sistema).</li>
+    <li>Sem "papéis" complexos por enquanto — só "autenticado" vs "não autenticado" pra rotas que exigem identificar o aluno.</li>
+  </ul>
+
+  <h2 id="como-usar-este-documento">9. Como usar este documento</h2>
+  <p>Este arquivo é a <strong>especificação</strong> que os próximos materiais da trilha `node-express/` vão implementar, endpoint por endpoint. Ele não muda conforme a implementação avança — se durante a implementação surgir necessidade de mudar uma regra ou adicionar uma entidade, volte aqui primeiro e atualize a especificação, antes de mudar o código. Mantém spec e código alinhados, e evita "regra escondida só no código" que ninguém documentou.</p>
+
+  <h2 id="proximos-passos">10. O que vem a seguir</h2>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Schema do banco de dados</strong>: as 4 entidades viram tabelas de verdade no Postgres, com tipos, chaves estrangeiras e restrições.</li>
+      <li><strong>Primeiro endpoint funcional</strong>: servidor Express de pé, conexão com Postgres testada, implementando <code>GET /alunos</code> e <code>POST /alunos</code> como primeiro recorte real deste projeto.</li>
+      <li><strong>CRUD completo</strong> das demais entidades (Instrutor, Aula), aplicando as regras 1-3.</li>
+      <li><strong>Matrícula e suas regras</strong>: o endpoint mais rico do projeto — capacidade máxima, duplicidade, cancelamento.</li>
+      <li><strong>Autenticação</strong>: login de aluno, proteção das rotas de matrícula.</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Com o domínio fechado, o próximo material já parte direto pra código — sem precisar mais decidir "o que é o negócio", só "como expor isso via HTTP direito".</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

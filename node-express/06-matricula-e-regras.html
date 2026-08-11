@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Matrícula e suas regras</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="05-crud-instrutor-aula.html">&larr; 5. CRUD completo: Instrutor e Aula</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-que-vamos-construir">1. O que vamos construir</a></li>
+    <li><a href="#o-que-e-join">2. O que é JOIN, antes de usar um</a></li>
+    <li><a href="#extendendo-alunos">3. Extendendo alunosRepository</a></li>
+    <li><a href="#repository-matriculas">4. Repository de matrículas</a></li>
+    <li><a href="#regra-1">5. Regra 1: capacidade máxima</a></li>
+    <li><a href="#regra-2">6. Regra 2: matrícula duplicada</a></li>
+    <li><a href="#rota-matricular">7. Rota: matricular um aluno</a></li>
+    <li><a href="#regra-4">8. Regra 4: cancelamento via PATCH</a></li>
+    <li><a href="#rotas-consulta">9. Rotas de consulta</a></li>
+    <li><a href="#codigo-completo">10. Código completo dos arquivos alterados</a></li>
+    <li><a href="#testando">11. Testando o fluxo completo com curl</a></li>
+    <li><a href="#condicao-corrida">12. Ponto de atenção: condição de corrida</a></li>
+    <li><a href="#erros-comuns">13. Erros comuns</a></li>
+    <li><a href="#proximos-passos">14. O que vem a seguir</a></li>
+  </ol>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 6</div>
+  <h1>Matrícula e suas regras</h1>
+  <p class="subtitle">Última peça do projeto: a entidade que liga aluno e aula. É também a mais rica em regra de negócio — as 3 que faltavam do documento de projeto (parte 2) se resolvem aqui: capacidade máxima, matrícula duplicada e cancelamento.</p>
+
+  <h2 id="o-que-vamos-construir">1. O que vamos construir</h2>
+  <p>Retomando o mapa de endpoints da parte 2 do projeto, os que faltavam implementar:</p>
+  <table>
+    <thead><tr><th>Rota</th><th>O que faz</th><th>Regra aplicada</th></tr></thead>
+    <tbody>
+      <tr><td><code>POST /aulas/:id/matriculas</code></td><td>Matricula um aluno na aula</td><td>Regra 1 (capacidade) + Regra 2 (duplicidade)</td></tr>
+      <tr><td><code>PATCH /aulas/:id/matriculas/:matriculaId</code></td><td>Cancela a matrícula</td><td>Regra 4 (nunca <code>DELETE</code>)</td></tr>
+      <tr><td><code>GET /aulas/:id/matriculas</code></td><td>Lista alunos matriculados numa aula</td><td>—</td></tr>
+      <tr><td><code>GET /alunos/:id/matriculas</code></td><td>Lista aulas em que um aluno está matriculado</td><td>—</td></tr>
+    </tbody>
+  </table>
+  <p>Repara que cada regra já tem "dono" definido desde antes: a <strong>Regra 2</strong> (parte 3, seção 8) já é garantida pelo <strong>banco</strong>, via índice único parcial — aqui só precisamos capturar o erro que o banco lança e transformar em resposta HTTP correta. A <strong>Regra 1</strong> não tem como o banco resolver sozinho (precisa contar linhas) — fica 100% no código, como já antecipado na parte 3, seção 9.</p>
+
+  <h2 id="o-que-e-join">2. O que é JOIN, antes de usar um</h2>
+  <p>Até agora, toda consulta deste projeto olhou pra <strong>uma tabela só</strong> (<code>SELECT * FROM alunos</code>, <code>SELECT * FROM aulas WHERE id = $1</code>). Mas "listar os alunos matriculados numa aula" precisa de dado de <strong>duas tabelas ao mesmo tempo</strong>: o `id`/`nome`/`email` que está em <code>alunos</code>, e o vínculo que está em <code>matriculas</code>.</p>
+  <p><code>JOIN</code> é o comando SQL que combina linhas de duas tabelas com base numa condição de igualdade — geralmente a chave estrangeira batendo com a chave primária:</p>
+  <pre><code>SELECT matriculas.id, matriculas.status, alunos.nome
+FROM matriculas
+JOIN alunos ON alunos.id = matriculas.aluno_id
+WHERE matriculas.aula_id = 1;</code></pre>
+  <p>Passo a passo: <code>FROM matriculas</code> começa pela tabela de matrículas. <code>JOIN alunos ON alunos.id = matriculas.aluno_id</code> diz "pra cada matrícula, gruda a linha de <code>alunos</code> cujo <code>id</code> bate com o <code>aluno_id</code> dessa matrícula". O resultado é uma tabela "achatada", com colunas das duas tabelas juntas numa linha só por matrícula.</p>
+  <div class="callout"><p>Sem <code>JOIN</code>, a alternativa seria fazer 2 consultas separadas (uma em <code>matriculas</code>, outra em <code>alunos</code>) e juntar os dados <strong>no JavaScript</strong> na mão. Funciona, mas é mais lento (duas viagens ao banco) e mais código. <code>JOIN</code> deixa o banco — que é otimizado pra isso — fazer a junção de uma vez.</p></div>
+
+  <h2 id="extendendo-alunos">3. Extendendo alunosRepository</h2>
+  <p>Precisamos saber se um <code>aluno_id</code> existe antes de matricular (mesma checagem que já fazemos com <code>instrutor_id</code> na parte 5) — mas <code>alunosRepository.js</code> ainda só tem <code>listar</code> e <code>criar</code> (parte 4). Adiciona <code>buscarPorId</code>, no mesmo padrão dos outros repositories:</p>
+  <pre><code>// repositories/alunosRepository.js (adicionar)
+async function buscarPorId(id) {
+  const resultado = await pool.query('SELECT * FROM alunos WHERE id = $1', [id]);
+  return resultado.rows[0];
+}
+
+module.exports = { listar, criar, buscarPorId };</code></pre>
+
+  <h2 id="repository-matriculas">4. Repository de matrículas</h2>
+  <pre><code>// repositories/matriculasRepository.js
+const pool = require('../db/pool');
+
+async function contarConfirmadas(aula_id) {
+  const resultado = await pool.query(
+    /* sql */ `SELECT COUNT(*)::int AS total
+               FROM matriculas
+               WHERE aula_id = $1 AND status = 'confirmada'`,
+    [aula_id]
+  );
+  return resultado.rows[0].total;
+}
+
+async function criar({ aluno_id, aula_id }) {
+  const resultado = await pool.query(
+    /* sql */ `INSERT INTO matriculas (aluno_id, aula_id)
+               VALUES ($1, $2)
+               RETURNING *`,
+    [aluno_id, aula_id]
+  );
+  return resultado.rows[0];
+}
+
+async function listarPorAula(aula_id) {
+  const resultado = await pool.query(
+    /* sql */ `SELECT matriculas.id, matriculas.status, matriculas.criado_em,
+                      alunos.id AS aluno_id, alunos.nome AS aluno_nome, alunos.email AS aluno_email
+               FROM matriculas
+               JOIN alunos ON alunos.id = matriculas.aluno_id
+               WHERE matriculas.aula_id = $1
+               ORDER BY matriculas.id`,
+    [aula_id]
+  );
+  return resultado.rows;
+}
+
+async function listarPorAluno(aluno_id) {
+  const resultado = await pool.query(
+    /* sql */ `SELECT matriculas.id, matriculas.status, matriculas.criado_em,
+                      aulas.id AS aula_id, aulas.nome AS aula_nome,
+                      aulas.dia_semana, aulas.hora_inicio
+               FROM matriculas
+               JOIN aulas ON aulas.id = matriculas.aula_id
+               WHERE matriculas.aluno_id = $1
+               ORDER BY matriculas.id`,
+    [aluno_id]
+  );
+  return resultado.rows;
+}
+
+async function buscarPorIdEAula(id, aula_id) {
+  const resultado = await pool.query(
+    'SELECT * FROM matriculas WHERE id = $1 AND aula_id = $2',
+    [id, aula_id]
+  );
+  return resultado.rows[0];
+}
+
+async function cancelar(id) {
+  const resultado = await pool.query(
+    "UPDATE matriculas SET status = 'cancelada' WHERE id = $1 RETURNING *",
+    [id]
+  );
+  return resultado.rows[0];
+}
+
+module.exports = {
+  contarConfirmadas,
+  criar,
+  listarPorAula,
+  listarPorAluno,
+  buscarPorIdEAula,
+  cancelar,
+};</code></pre>
+  <p>Repara o <code>AS aluno_nome</code>, <code>AS aula_nome</code>: como as duas tabelas do <code>JOIN</code> têm coluna <code>nome</code> (uma é nome do aluno, outra é nome da aula), sem apelidar ficaria ambíguo qual é qual no resultado. <code>AS</code> renomeia a coluna na resposta, deixando explícito.</p>
+
+  <h2 id="regra-1">5. Regra 1: capacidade máxima</h2>
+  <p>Do documento de projeto (parte 2): <em>"uma matrícula só pode ser criada se o número de matrículas confirmadas na aula for menor que a capacidade máxima"</em>. Isso exige <strong>contar linhas</strong> — não dá pra expressar como restrição simples de coluna, por isso ficou no código desde o começo (parte 3, seção 9).</p>
+  <p><code>contarConfirmadas</code> (seção 4) faz a contagem; a rota compara com <code>capacidade_maxima</code> da aula antes de inserir — ver seção 7.</p>
+
+  <h2 id="regra-2">6. Regra 2: matrícula duplicada</h2>
+  <p>Essa já está resolvida — pelo banco, desde a parte 3 (seção 8), pelo índice único parcial <code>matriculas_aluno_aula_confirmada_idx</code>. O que falta é só o lado da API: capturar o erro que o Postgres lança quando a restrição barra o <code>INSERT</code>, e devolver status certo em vez de <code>500</code>.</p>
+  <p>Mesma mecânica do <code>err.code === '23503'</code> que já usamos pro <code>DELETE</code> de instrutor (parte 5) — só que o código muda, porque o tipo de violação é outro:</p>
+  <table>
+    <thead><tr><th>Código Postgres (SQLSTATE)</th><th>Nome</th><th>Quando acontece</th><th>Já usamos em</th></tr></thead>
+    <tbody>
+      <tr><td><code>23503</code></td><td><em>foreign_key_violation</em></td><td><code>DELETE</code>/<code>INSERT</code> esbarra numa <code>FOREIGN KEY</code></td><td><code>DELETE /instrutores/:id</code>, parte 5</td></tr>
+      <tr><td><code>23505</code></td><td><em>unique_violation</em></td><td><code>INSERT</code>/<code>UPDATE</code> esbarra numa restrição <code>UNIQUE</code> (inclusive índice único parcial)</td><td><code>POST /aulas/:id/matriculas</code>, aqui</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="rota-matricular">7. Rota: matricular um aluno</h2>
+  <pre><code>// routes/aulas.js (adicionar)
+router.post('/:id/matriculas', async (req, res, next) => {
+  const aula = await aulasRepository.buscarPorId(req.params.id);
+  if (!aula) {
+    return res.status(404).json({ erro: 'Aula não encontrada' });
+  }
+
+  const { aluno_id } = req.body;
+  if (!aluno_id) {
+    return res.status(400).json({ erro: 'aluno_id é obrigatório' });
+  }
+
+  const aluno = await alunosRepository.buscarPorId(aluno_id);
+  if (!aluno) {
+    return res.status(422).json({ erro: 'aluno_id não corresponde a nenhum aluno existente' });
+  }
+
+  const totalConfirmadas = await matriculasRepository.contarConfirmadas(aula.id);
+  if (totalConfirmadas >= aula.capacidade_maxima) {
+    return res.status(409).json({ erro: 'Aula sem vagas disponíveis' });
+  }
+
+  try {
+    const matriculaCriada = await matriculasRepository.criar({ aluno_id, aula_id: aula.id });
+    res
+      .status(201)
+      .location(`/aulas/${aula.id}/matriculas/${matriculaCriada.id}`)
+      .json(matriculaCriada);
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ erro: 'Aluno já matriculado nesta aula' });
+    }
+    next(err);
+  }
+});</code></pre>
+  <p>Ordem das checagens importa, cada uma "mais barata" que a próxima: primeiro confere se a <strong>aula</strong> existe (<code>404</code>, sem nem olhar o body). Depois valida <strong>forma</strong> do que veio (<code>400</code>, campo ausente). Depois confere se o <strong>aluno</strong> existe (<code>422</code>, regra de referência). Depois a <strong>Regra 1</strong> (<code>409</code>, capacidade). Só se passar por tudo isso tenta o <code>INSERT</code>, que ainda pode falhar na <strong>Regra 2</strong> (<code>409</code>, capturado no <code>catch</code>). Validar do mais simples/barato pro mais caro evita bater no banco sem necessidade quando um erro simples já explica o problema.</p>
+
+  <h2 id="regra-4">8. Regra 4: cancelamento via PATCH</h2>
+  <p>Do documento de projeto: <em>"cancelar uma matrícula não apaga o registro — muda <code>status</code> para <code>cancelada</code>"</em>. Por isso a rota é <code>PATCH</code>, nunca <code>DELETE</code>:</p>
+  <pre><code>// routes/aulas.js (adicionar)
+router.patch('/:id/matriculas/:matriculaId', async (req, res) => {
+  const { status } = req.body;
+
+  if (status !== 'cancelada') {
+    return res.status(400).json({ erro: "status precisa ser 'cancelada'" });
+  }
+
+  const matricula = await matriculasRepository.buscarPorIdEAula(
+    req.params.matriculaId,
+    req.params.id
+  );
+
+  if (!matricula) {
+    return res.status(404).json({ erro: 'Matrícula não encontrada' });
+  }
+
+  const matriculaCancelada = await matriculasRepository.cancelar(matricula.id);
+  res.json(matriculaCancelada);
+});</code></pre>
+  <div class="rule">
+    <span class="tag">Por que buscarPorIdEAula, não só buscarPorId</span>
+    <p>A URI é <code>/aulas/:id/matriculas/:matriculaId</code> — o <code>:id</code> da aula faz parte do endereço, então a matrícula precisa pertencer <strong>aquela</strong> aula, não só existir em algum lugar do banco. Sem essa checagem dupla (<code>id = $1 AND aula_id = $2</code>), alguém poderia cancelar a matrícula 5 chamando <code>/aulas/999/matriculas/5</code> — URI mentindo sobre o contexto, mas funcionando do mesmo jeito. Validar os dois IDs juntos mantém a URI honesta com o que ela promete.</p>
+  </div>
+  <p>Depois de cancelada, a matrícula <strong>continua existindo</strong> no banco (histórico preservado) e <strong>libera a vaga</strong> — porque <code>contarConfirmadas</code> (Regra 1) só conta <code>status = 'confirmada'</code>, e essa matrícula não é mais isso.</p>
+
+  <h2 id="rotas-consulta">9. Rotas de consulta</h2>
+  <pre><code>// routes/aulas.js (adicionar)
+router.get('/:id/matriculas', async (req, res) => {
+  const aula = await aulasRepository.buscarPorId(req.params.id);
+  if (!aula) {
+    return res.status(404).json({ erro: 'Aula não encontrada' });
+  }
+
+  const matriculas = await matriculasRepository.listarPorAula(req.params.id);
+  res.json(matriculas);
+});</code></pre>
+  <pre><code>// routes/alunos.js (adicionar)
+router.get('/:id/matriculas', async (req, res) => {
+  const aluno = await alunosRepository.buscarPorId(req.params.id);
+  if (!aluno) {
+    return res.status(404).json({ erro: 'Aluno não encontrado' });
+  }
+
+  const matriculas = await matriculasRepository.listarPorAluno(req.params.id);
+  res.json(matriculas);
+});</code></pre>
+
+  <h2 id="codigo-completo">10. Código completo dos arquivos alterados</h2>
+  <p>Pra não perder o fio, os 3 arquivos que mudam nesta parte, do jeito que ficam ao final (novo: <code>repositories/matriculasRepository.js</code>, seção 4; alterados: os dois abaixo).</p>
+  <pre><code>// routes/aulas.js — topo do arquivo, imports
+const express = require('express');
+const aulasRepository = require('../repositories/aulasRepository');
+const instrutoresRepository = require('../repositories/instrutoresRepository');
+const alunosRepository = require('../repositories/alunosRepository');
+const matriculasRepository = require('../repositories/matriculasRepository');
+
+const router = express.Router();
+
+// ... rotas de CRUD de aula já existentes (parte 5) ...
+// ... + as 3 rotas novas das seções 7, 8 e 9 ...
+
+module.exports = router;</code></pre>
+  <pre><code>// routes/alunos.js — completo
+const express = require('express');
+const alunosRepository = require('../repositories/alunosRepository');
+const matriculasRepository = require('../repositories/matriculasRepository');
+
+const router = express.Router();
+
+router.get('/', async (req, res) => {
+  const alunos = await alunosRepository.listar();
+  res.json(alunos);
+});
+
+router.get('/:id/matriculas', async (req, res) => {
+  const aluno = await alunosRepository.buscarPorId(req.params.id);
+  if (!aluno) {
+    return res.status(404).json({ erro: 'Aluno não encontrado' });
+  }
+
+  const matriculas = await matriculasRepository.listarPorAluno(req.params.id);
+  res.json(matriculas);
+});
+
+router.post('/', async (req, res) => {
+  const { nome, email, data_nascimento } = req.body;
+
+  if (!nome || !email || !data_nascimento) {
+    return res.status(400).json({
+      erro: 'nome, email e data_nascimento são obrigatórios',
+    });
+  }
+
+  const alunoCriado = await alunosRepository.criar({ nome, email, data_nascimento });
+  res.status(201).location(`/alunos/${alunoCriado.id}`).json(alunoCriado);
+});
+
+module.exports = router;</code></pre>
+
+  <h2 id="testando">11. Testando o fluxo completo com curl</h2>
+  <pre><code># matricula o aluno 3 na aula 1 (supondo que já existem, das partes anteriores)
+curl -X POST http://localhost:3000/aulas/1/matriculas \
+  -H "Content-Type: application/json" \
+  -d '{"aluno_id": 3}'
+# 201, guarda o id da matrícula retornada (ex: 1)
+
+# Regra 2: tenta matricular o MESMO aluno na MESMA aula de novo
+curl -X POST http://localhost:3000/aulas/1/matriculas \
+  -H "Content-Type: application/json" \
+  -d '{"aluno_id": 3}'
+# 409 — "Aluno já matriculado nesta aula"
+
+# aluno_id inexistente
+curl -X POST http://localhost:3000/aulas/1/matriculas \
+  -H "Content-Type: application/json" \
+  -d '{"aluno_id": 999}'
+# 422
+
+# lista quem está matriculado na aula 1
+curl http://localhost:3000/aulas/1/matriculas
+
+# lista em que aulas o aluno 3 está matriculado
+curl http://localhost:3000/alunos/3/matriculas
+
+# cancela a matrícula 1 (da aula 1)
+curl -X PATCH http://localhost:3000/aulas/1/matriculas/1 \
+  -H "Content-Type: application/json" \
+  -d '{"status": "cancelada"}'
+# 200
+
+# Regra 2 de novo: matricula o MESMO aluno na MESMA aula, depois de cancelado — deve funcionar agora
+curl -X POST http://localhost:3000/aulas/1/matriculas \
+  -H "Content-Type: application/json" \
+  -d '{"aluno_id": 3}'
+# 201 — índice único parcial só olha confirmada, cancelada não bloqueia (parte 3, seção 8)</code></pre>
+  <p>Pra testar a <strong>Regra 1</strong> (capacidade): cria uma aula com <code>capacidade_maxima: 1</code>, matricula um aluno (deve dar <code>201</code>), tenta matricular um segundo aluno diferente na mesma aula (deve dar <code>409</code> — "sem vagas").</p>
+
+  <h2 id="condicao-corrida">12. Ponto de atenção: condição de corrida</h2>
+  <div class="warn">
+    <p>A Regra 1, do jeito que está, tem uma brecha: se duas requisições <code>POST /aulas/1/matriculas</code> chegarem <strong>ao mesmo tempo</strong> pra uma aula com 1 vaga sobrando, as duas podem rodar <code>contarConfirmadas</code> <strong>antes</strong> de qualquer uma inserir — as duas veem "tem vaga", as duas inserem, a aula fica com 1 vaga a mais que o permitido. Diferente da Regra 2, que o banco garante mesmo sob concorrência (o índice único é atômico), a Regra 1 não tem proteção equivalente aqui.</p>
+    <p>Postgres resolveria isso com um <code>EXCLUDE</code> constraint ou um controle de concorrência mais explícito (<code>SELECT ... FOR UPDATE</code>, travando a linha da aula durante a checagem) — fora do escopo deste material por ora, registrado como melhoria futura, do mesmo jeito que decidimos deixar o <code>DELETE</code> de instrutor sem soft-delete por enquanto.</p>
+  </div>
+
+  <h2 id="erros-comuns">13. Erros comuns</h2>
+  <ol>
+    <li><strong>Usar <code>DELETE</code> pra cancelar matrícula</strong> — quebra a Regra 4 direto. Cancelamento é sempre <code>PATCH</code> mudando <code>status</code>, nunca remoção da linha.</li>
+    <li><strong>Esquecer o <code>AS</code> nas colunas repetidas do <code>JOIN</code></strong> — <code>alunos.nome</code> e <code>aulas.nome</code> colidiriam no resultado (as duas virariam só <code>nome</code>, uma sobrescrevendo a outra no objeto JS).</li>
+    <li><strong>Checar capacidade depois de inserir, não antes</strong> — inverteria a ordem da seção 7, permitindo estourar a capacidade e só descobrir depois (ou pior, teria que desfazer o <code>INSERT</code> manualmente).</li>
+    <li><strong>Confundir <code>23503</code> com <code>23505</code></strong> — são violações diferentes (chave estrangeira vs. unicidade); usar o código errado no <code>catch</code> faz o <code>if</code> nunca bater, e o erro cai no <code>500</code> genérico em vez do <code>409</code> esperado.</li>
+  </ol>
+
+  <h2 id="proximos-passos">14. O que vem a seguir</h2>
+  <p>Com Aluno, Instrutor, Aula e Matrícula todos funcionando — CRUD completo e as 4 regras de negócio do projeto implementadas — falta proteger quem pode fazer o quê.</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Autenticação e autorização</strong>: login de aluno (JWT), proteger rotas de matrícula pra só o próprio aluno (ou um admin) poder matricular/cancelar em seu nome.</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Quando terminar de testar o fluxo completo (matricular, tentar duplicar, lotar a aula, cancelar, rematricular), volta com dúvidas — principalmente se o <code>JOIN</code> devolver algo diferente do esperado, ou se ficar em dúvida sobre quando usar <code>404</code> vs <code>422</code> nas checagens em cadeia da seção 7.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

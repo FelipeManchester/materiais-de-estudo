@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Primeira API funcional</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="04-escolha-de-stack.html">&larr; 4. Escolha de stack</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#independente-de-stack">1. Por que este material é independente de stack</a></li>
+    <li><a href="#camadas">2. As camadas de uma API, em qualquer stack</a></li>
+    <li><a href="#roteamento">3. Roteamento: da URI ao handler</a></li>
+    <li><a href="#request-response">4. O objeto de requisição e o de resposta</a></li>
+    <li><a href="#persistencia">5. Persistência: onde os dados realmente vivem</a></li>
+    <li><a href="#validacao">6. Validação de entrada</a></li>
+    <li><a href="#tratamento-erros">7. Tratamento de erros centralizado</a></li>
+    <li><a href="#middlewares">8. Middlewares / interceptors: o conceito</a></li>
+    <li><a href="#estrutura-projeto">9. Estrutura de projeto sugerida</a></li>
+    <li><a href="#testando">10. Testando manualmente antes de qualquer front-end</a></li>
+    <li><a href="#erros-comuns">11. Erros conceituais comuns</a></li>
+    <li><a href="#proximos-passos">12. O que vem a seguir</a></li>
+  </ol>
+</nav>
+
+<main>
+  <div class="eyebrow">Material de estudo — API REST — Parte 5</div>
+  <h1>Primeira API funcional</h1>
+  <p class="subtitle">Este material explica <strong>como uma API REST é construída na prática</strong> — as peças que toda stack tem, só com nomes diferentes. Não assume Node, Python, Java ou qualquer outra linguagem: os conceitos aqui valem antes de você escrever a primeira linha de código na stack escolhida.</p>
+
+  <h2 id="independente-de-stack">1. Por que este material é independente de stack</h2>
+  <p>A parte 4 comparou as opções de mercado, mas não fixou uma — a escolha final é sua, e pode até mudar no futuro (sua ou de quem mais ler este material). O que <strong>não muda</strong> ao trocar de stack são os conceitos: toda API HTTP, em qualquer linguagem, resolve os mesmos problemas — receber uma requisição, decidir o que fazer com ela, validar entrada, buscar/alterar dado, devolver uma resposta.</p>
+  <p>O que muda de stack pra stack é só a <strong>sintaxe</strong> e o <strong>nome</strong> que cada framework dá pra essas peças. Depois de decidir a stack, a tradução desses conceitos pro código real é rápida — e aí sim vale conversar/pesquisar as particularidades da ferramenta escolhida.</p>
+
+  <h2 id="camadas">2. As camadas de uma API, em qualquer stack</h2>
+  <p>Praticamente toda API minimamente organizada separa responsabilidades em camadas. Os nomes variam (controller/handler, service/use case, repository/DAO), mas o papel de cada uma é o mesmo:</p>
+  <div class="layer-diagram">
+    <div class="layer"><strong>Roteamento</strong><span>Recebe a requisição HTTP, identifica método + URI, decide qual handler chamar</span></div>
+    <div class="arrow">&darr;</div>
+    <div class="layer"><strong>Handler / Controller</strong><span>Lê dados da requisição (params, query, body), chama a lógica de negócio, monta a resposta</span></div>
+    <div class="arrow">&darr;</div>
+    <div class="layer"><strong>Validação</strong><span>Confere se o que chegou é válido antes de prosseguir (formato, campos obrigatórios, tipos)</span></div>
+    <div class="arrow">&darr;</div>
+    <div class="layer"><strong>Lógica de negócio / Service</strong><span>Regras da aplicação: "não pode cancelar pedido já entregue", "e-mail precisa ser único"</span></div>
+    <div class="arrow">&darr;</div>
+    <div class="layer"><strong>Acesso a dados / Repository</strong><span>Fala com o banco de dados (ou outro armazenamento) — é a única camada que sabe que existe um banco</span></div>
+  </div>
+  <p>Por que separar em camadas, e não escrever tudo dentro de uma função só: cada camada muda por um motivo diferente. Trocar de banco de dados só deveria afetar a camada de acesso a dados. Mudar uma regra de negócio não deveria exigir mexer no roteamento. Isso é o mesmo princípio de separação de responsabilidades da restrição Client-Server que você viu na parte 1, só que aplicado <em>dentro</em> do servidor.</p>
+  <div class="callout"><p>Numa API pequena de estudo, tudo bem misturar camadas no começo pra não travar em arquitetura antes de ter algo funcionando. O importante é reconhecer essas responsabilidades — separar em arquivos/pastas vem depois, naturalmente, quando o código começar a doer.</p></div>
+
+  <h2 id="roteamento">3. Roteamento: da URI ao handler</h2>
+  <p>Todo framework web tem um mecanismo que mapeia <code>método + padrão de URI</code> para uma função que trata aquela requisição. Conceito, independente de sintaxe:</p>
+  <pre><code>GET    /pedidos          -&gt;  função "listarPedidos"
+GET    /pedidos/:id      -&gt;  função "buscarPedido"     (:id = parte variável da URI)
+POST   /pedidos          -&gt;  função "criarPedido"
+PATCH  /pedidos/:id      -&gt;  função "atualizarPedido"
+DELETE /pedidos/:id      -&gt;  função "removerPedido"</code></pre>
+  <p>Repare que esse mapeamento é <strong>exatamente</strong> o desenho de URIs da parte 3 — o roteamento é onde aquele design vira código de verdade. Cada framework tem sua sintaxe pra declarar isso (arquivo de rotas, decorators, convenção de pastas), mas a estrutura por trás é sempre essa tabela método+padrão &rarr; função.</p>
+
+  <h3>Parâmetros de rota vs. query string</h3>
+  <p>Vale reforçar a diferença, porque os dois chegam de formas diferentes no handler:</p>
+  <ul>
+    <li><strong>Parâmetro de rota</strong> (<code>/pedidos/501</code>): parte obrigatória da URI, identifica <em>qual</em> recurso. Framework extrai isso e entrega como algo tipo <code>params.id = "501"</code>.</li>
+    <li><strong>Query string</strong> (<code>/pedidos?status=pago</code>): parte opcional, geralmente filtro/paginação/ordenação (parte 3). Framework entrega separado, tipo <code>query.status = "pago"</code>.</li>
+  </ul>
+
+  <h2 id="request-response">4. O objeto de requisição e o de resposta</h2>
+  <p>Todo handler, em qualquer stack, recebe (de alguma forma) acesso a duas coisas:</p>
+  <table>
+    <thead><tr><th>Do lado da requisição</th><th>Do lado da resposta</th></tr></thead>
+    <tbody>
+      <tr><td>Método HTTP usado</td><td>Código de status a devolver (parte 2)</td></tr>
+      <tr><td>Parâmetros de rota (<code>:id</code>)</td><td>Headers a devolver (ex: <code>Location</code> num <code>201</code>)</td></tr>
+      <tr><td>Query string (filtros, paginação)</td><td>Body da resposta (o JSON com o resultado)</td></tr>
+      <tr><td>Headers recebidos (<code>Authorization</code>, <code>Content-Type</code>)</td><td></td></tr>
+      <tr><td>Body recebido (dado enviado em <code>POST</code>/<code>PUT</code>/<code>PATCH</code>)</td><td></td></tr>
+    </tbody>
+  </table>
+  <p>O trabalho de um handler, resumido: ler o que precisar do lado "requisição", processar, e preencher o lado "resposta" — nessa ordem, sempre.</p>
+
+  <h2 id="persistencia">5. Persistência: onde os dados realmente vivem</h2>
+  <p>Pra ter uma API "funcional" de verdade, o dado precisa sobreviver além de uma única execução do processo. Três níveis, do mais simples ao mais realista:</p>
+  <ol>
+    <li><strong>Em memória (array/objeto na aplicação)</strong>: mais simples possível pra aprender roteamento/handlers sem se preocupar com banco ainda. Problema: dado some toda vez que o servidor reinicia. Bom só pra um primeiro protótipo de estudo.</li>
+    <li><strong>Arquivo local (JSON, SQLite)</strong>: sobrevive a reinícios, ainda simples de configurar, sem precisar instalar um banco separado. Passo intermediário razoável.</li>
+    <li><strong>Banco de dados de verdade (PostgreSQL, MySQL, MongoDB...)</strong>: o que uma API real usa em produção. Introduz um novo conceito importante: <strong>ORM</strong> (<em>Object-Relational Mapper</em>) ou <em>query builder</em> — uma biblioteca que traduz chamadas no código pra comandos SQL (ou equivalente), evitando escrever SQL cru toda vez. Cada stack tem os seus (ex: no ecossistema Node existem múltiplas opções de ORM; em outras linguagens, o padrão costuma vir embutido no framework, como visto na parte 4).</li>
+  </ol>
+  <div class="callout"><p>Sugestão de progressão pra essa parte da trilha: comece em memória pra validar que os endpoints respondem certo (métodos, status codes, formato de resposta — tudo que as partes 2 e 3 ensinaram), depois evolua pra um banco de verdade. Trocar a camada de persistência depois não deveria exigir tocar no roteamento nem nos handlers, se as camadas da seção 2 estiverem bem separadas — esse é o teste real de uma boa separação.</p></div>
+
+  <h2 id="validacao">6. Validação de entrada</h2>
+  <p>Toda API precisa desconfiar do que chega — nunca assumir que o cliente mandou o formato certo. Duas categorias de validação:</p>
+  <ul>
+    <li><strong>Validação de forma (schema)</strong>: campo existe? é do tipo certo (string, número, data)? está dentro de um formato esperado (e-mail válido, data no formato certo)? Isso é mecânico e várias stacks têm bibliotecas prontas pra declarar o formato esperado e validar automaticamente.</li>
+    <li><strong>Validação de regra de negócio</strong>: mesmo com formato correto, faz sentido no contexto? ("cliente existe?", "quantidade não pode ser negativa", "não pode cancelar pedido já entregue"). Essa fica na camada de lógica de negócio (seção 2), não na validação de schema.</li>
+  </ul>
+  <p>Onde isso se conecta com o que você já viu: validação de schema que falha devolve <code>400 Bad Request</code>; validação de regra de negócio que falha geralmente devolve <code>422 Unprocessable Entity</code> ou <code>409 Conflict</code> — ver a tabela de status codes da parte 2.</p>
+
+  <h2 id="tratamento-erros">7. Tratamento de erros centralizado</h2>
+  <p>Erro comum de quem está começando: colocar um <code>try/catch</code> (ou equivalente) repetido dentro de cada handler, cada um decidindo na mão qual status code devolver. Funciona, mas duplica lógica e é fácil esquecer um caso.</p>
+  <p>Praticamente toda stack madura oferece um mecanismo de <strong>tratamento de erro centralizado</strong>: um ponto único (um handler especial, um middleware de erro, um interceptor) que captura qualquer erro não tratado nos handlers individuais e decide o status code + formato da resposta de erro, de forma consistente pra API inteira.</p>
+  <pre><code>Handler de "criar pedido" lança erro "produto não encontrado"
+                    &darr;
+     (framework intercepta o erro automaticamente)
+                    &darr;
+Tratador central de erros decide:
+  - erro é "não encontrado" -&gt; 404
+  - erro é "validação"      -&gt; 400
+  - erro é "regra de negócio" quebrada -&gt; 422
+  - erro não reconhecido    -&gt; 500 (e loga pra investigar depois)</code></pre>
+  <p>Formato de resposta de erro consistente também importa — definir um "contrato de erro" (ex: sempre <code>{ "erro": { "mensagem": "...", "codigo": "..." } }</code>) que toda a API segue, pra quem consome não precisar tratar cada endpoint de erro de um jeito diferente.</p>
+
+  <h2 id="middlewares">8. Middlewares / interceptors: o conceito</h2>
+  <p>Quase toda stack tem algum mecanismo de <strong>função que roda no meio do caminho</strong>, entre a requisição chegar e o handler final processar — geralmente chamado de <em>middleware</em> (Node, Python) ou <em>interceptor</em>/<em>filter</em> (Java, .NET). Serve pra lógica que se repete em vários endpoints:</p>
+  <ul>
+    <li>Checar se existe um token válido no header <code>Authorization</code> antes de deixar a requisição continuar (autenticação — assunto da próxima parte da trilha)</li>
+    <li>Logar toda requisição que chega (método, URI, tempo de resposta)</li>
+    <li>Tratamento de erro centralizado, como visto na seção anterior, geralmente é implementado como um middleware especial</li>
+    <li>Parsing do body da requisição (transformar o JSON cru recebido em um objeto que o handler consegue usar)</li>
+  </ul>
+  <p>Ideia central: em vez de repetir a mesma checagem em cada handler, você registra uma função que roda automaticamente antes (ou depois) de qualquer rota — ou só das rotas que você escolher.</p>
+
+  <h2 id="estrutura-projeto">9. Estrutura de projeto sugerida</h2>
+  <p>Nomes de pasta variam por convenção de stack, mas a divisão conceitual costuma seguir as camadas da seção 2:</p>
+  <pre><code>projeto/
+├── rotas/         (ou routes/)      -&gt; mapeamento URI -&gt; handler
+├── handlers/      (ou controllers/) -&gt; lê requisição, chama lógica, monta resposta
+├── servicos/      (ou services/)    -&gt; regras de negócio
+├── dados/         (ou repositories/) -&gt; acesso à persistência
+├── validacao/     (ou schemas/)     -&gt; definição do formato esperado de cada entrada
+└── middlewares/                     -&gt; funções que rodam no meio do caminho</code></pre>
+  <p>Não existe uma estrutura "oficial" — cada framework tem convenções próprias (algumas impõem essa estrutura, como vimos na parte 4 sobre frameworks opinativos; outras deixam livre). O que importa é reconhecer essas responsabilidades quando for organizar o código, independente de como as pastas acabam se chamando na prática.</p>
+
+  <h2 id="testando">10. Testando manualmente antes de qualquer front-end</h2>
+  <p>Antes de conectar um front-end, teste a API isoladamente — isso isola problemas: se algo não funciona, você sabe que é a API, não uma interação complicada entre duas aplicações.</p>
+  <p>Ferramentas comuns pra isso, nenhuma delas específica de stack:</p>
+  <ul>
+    <li><strong><code>curl</code></strong>: linha de comando, vem pré-instalado na maioria dos sistemas. Rápido pra testar um endpoint isolado.</li>
+    <li><strong>Postman / Insomnia</strong>: interface gráfica, permite salvar coleções de requisições, reutilizar token de autenticação entre chamadas, ver resposta formatada.</li>
+    <li><strong>Extensão de cliente HTTP no editor</strong> (ex: arquivos <code>.http</code> no VS Code): fica junto do código, versionável no git.</li>
+  </ul>
+  <pre><code># Exemplo com curl, testando o ciclo completo de um recurso
+curl -X POST http://localhost:3000/pedidos \
+  -H "Content-Type: application/json" \
+  -d '{"produto": "livro", "quantidade": 2}'
+
+curl http://localhost:3000/pedidos/501
+
+curl -X PATCH http://localhost:3000/pedidos/501 \
+  -H "Content-Type: application/json" \
+  -d '{"status": "pago"}'
+
+curl -X DELETE http://localhost:3000/pedidos/501</code></pre>
+  <p>Checklist mínimo pra considerar um endpoint "funcional": responde com o status code certo (parte 2), responde no formato esperado (JSON consistente), lida com entrada inválida sem quebrar (<code>400</code>/<code>422</code>, não <code>500</code>), e recurso criado/alterado realmente persiste entre requisições diferentes.</p>
+
+  <h2 id="erros-comuns">11. Erros conceituais comuns</h2>
+  <ol>
+    <li><strong>"Preciso decidir a arquitetura perfeita antes de escrever a primeira rota"</strong> — Não. Comece simples (até com tudo num arquivo só), separe em camadas conforme o código for crescendo e a mistura começar a atrapalhar.</li>
+    <li><strong>"Sem banco de dados não é uma API de verdade"</strong> — Não pro estágio de aprendizado. Uma API em memória que responde certo nos métodos, status codes e formato já validou os conceitos das partes 2 e 3. Banco entra depois, como camada de persistência isolada.</li>
+    <li><strong>"Validação e regra de negócio são a mesma coisa"</strong> — Não, ver seção 6. Formato errado é um tipo de problema (<code>400</code>); dado com formato certo mas que viola uma regra do domínio é outro (<code>422</code>/<code>409</code>).</li>
+    <li><strong>"Preciso testar direto pelo front-end pra saber se a API funciona"</strong> — Não, e isso dificulta debugar. Testar a API isolada (seção 10) primeiro elimina uma camada inteira de possíveis problemas.</li>
+  </ol>
+
+  <h2 id="proximos-passos">12. O que vem a seguir</h2>
+  <p>Com os conceitos de estrutura, roteamento, persistência e tratamento de erro entendidos, a trilha segue para:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Autenticação e autorização</strong> (JWT, API keys, OAuth — visão geral).</li>
+      <li><strong>Boas práticas de produção</strong>: versionamento, tratamento de erros, validação, documentação (OpenAPI/Swagger).</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Este material ficou no nível de conceito, de propósito — independente da stack que você (ou quem mais estiver lendo) escolheu na parte 4. As nuances de sintaxe e ferramentas específicas da stack escolhida valem a pena conversar separadamente, fora deste arquivo, pra este material continuar servindo de referência não importa a tecnologia usada.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

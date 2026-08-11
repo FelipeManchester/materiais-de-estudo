@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Primeiro endpoint funcional</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="03-schema-do-banco.html">&larr; 3. Schema do banco de dados</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-que-vamos-construir">1. O que vamos construir</a></li>
+    <li><a href="#arquivo-principal">2. O arquivo principal: index.js</a></li>
+    <li><a href="#conectando-postgres">3. Conectando no Postgres com pg</a></li>
+    <li><a href="#middleware-json">4. Lendo JSON do corpo da requisição</a></li>
+    <li><a href="#rota-get">5. Rota GET /alunos</a></li>
+    <li><a href="#rota-post">6. Rota POST /alunos</a></li>
+    <li><a href="#sql-injection">7. Por que usar $1, $2 em vez de concatenar string</a></li>
+    <li><a href="#tratamento-erro">8. Um tratamento de erro mínimo</a></li>
+    <li><a href="#codigo-completo">9. Código completo</a></li>
+    <li><a href="#rodando">10. Rodando o servidor</a></li>
+    <li><a href="#testando">11. Testando com curl</a></li>
+    <li><a href="#erros-comuns">12. Erros comuns</a></li>
+    <li><a href="#proximos-passos">13. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="05-crud-instrutor-aula.html">5. CRUD completo: Instrutor e Aula &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 4</div>
+  <h1>Primeiro endpoint funcional</h1>
+  <p class="subtitle">Schema criado (parte 3), Postgres no ar. Agora o Express entra em cena: um servidor de verdade, respondendo <code>GET</code> e <code>POST</code> em <code>/alunos</code>, lendo e gravando na tabela real. Primeiro recorte funcional do projeto Studio Fit.</p>
+
+  <h2 id="o-que-vamos-construir">1. O que vamos construir</h2>
+  <p>Só dois endpoints, aplicando o que as partes 2, 3 e 5 da trilha API REST já ensinaram — agora em código de verdade:</p>
+  <table>
+    <thead><tr><th>Rota</th><th>O que faz</th><th>Conceitos aplicados</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /alunos</code></td><td>Lista todos os alunos cadastrados</td><td>Método seguro/idempotente, <code>200 OK</code></td></tr>
+      <tr><td><code>POST /alunos</code></td><td>Cria um aluno novo</td><td>Validação de forma, <code>201 Created</code> + header <code>Location</code></td></tr>
+    </tbody>
+  </table>
+  <p>Ainda num único arquivo, sem separar em camadas (rotas/handlers/repository) — o callout da parte 5 (seção 2) já justificou essa escolha: separar em camadas cedo demais, antes de ter algo funcionando, atrapalha mais do que ajuda. Isso vem na próxima parte, quando o projeto crescer pras outras entidades.</p>
+
+  <h2 id="arquivo-principal">2. O arquivo principal: index.js</h2>
+  <p>Na pasta do projeto (a mesma do <code>docker-compose.yml</code> e do <code>db/schema.sql</code>), cria um arquivo <code>index.js</code> na raiz. É o ponto de entrada — o arquivo que o comando <code>npm run dev</code> (configurado no guia de ambiente) executa.</p>
+
+  <h2 id="conectando-postgres">3. Conectando no Postgres com pg</h2>
+  <p>A biblioteca <code>pg</code> (instalada no guia de ambiente) oferece uma classe chamada <code>Pool</code> — não conecta diretamente, mantém um <strong>conjunto de conexões reutilizáveis</strong> com o banco.</p>
+  <pre><code>const { Pool } = require('pg');
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});</code></pre>
+  <p>Por que <code>Pool</code> e não uma conexão única: cada requisição que chega no Express pode rodar ao mesmo tempo que outra (Node lida com várias requisições concorrentes). Se todas dividissem uma única conexão com o banco, ficariam na fila umas atrás das outras. O <code>Pool</code> mantém várias conexões abertas prontas, empresta uma pra cada consulta, devolve pro conjunto quando termina — sem você precisar gerenciar isso na mão.</p>
+  <p><code>process.env.DATABASE_URL</code> vem do arquivo <code>.env</code> criado no guia de ambiente (<code>postgresql://postgres:senha123@localhost:5432/estudo</code>) — por isso o <code>dotenv</code> precisa ser carregado <strong>antes</strong> de qualquer outra coisa no arquivo, seção 9.</p>
+
+  <h2 id="middleware-json">4. Lendo JSON do corpo da requisição</h2>
+  <p>Por padrão, o Express <strong>não</strong> interpreta o corpo de uma requisição automaticamente. Sem avisar isso, <code>req.body</code> viria <code>undefined</code> mesmo que o cliente tenha mandado um JSON certinho.</p>
+  <pre><code>app.use(express.json());</code></pre>
+  <p>Esse é o "parsing do body" mencionado na parte 5 da trilha API REST (seção 8) — um middleware que roda antes de qualquer rota, transformando o JSON cru recebido em objeto JavaScript acessível via <code>req.body</code>.</p>
+
+  <h2 id="rota-get">5. Rota GET /alunos</h2>
+  <pre><code>app.get('/alunos', async (req, res) => {
+  const resultado = await pool.query('SELECT * FROM alunos ORDER BY id');
+  res.json(resultado.rows);
+});</code></pre>
+  <p><code>pool.query(...)</code> envia o SQL, devolve uma <em>promise</em> — por isso o handler é <code>async</code> e usa <code>await</code>. O resultado (<code>resultado.rows</code>) é um array de objetos JavaScript, um por linha da tabela. <code>res.json(...)</code> já cuida de: definir <code>Content-Type: application/json</code>, serializar o array, e — por não chamar <code>res.status(...)</code> antes — usa o padrão do Express, que é <code>200 OK</code>.</p>
+  <p>Tabela vazia? <code>resultado.rows</code> vem como array vazio (<code>[]</code>), e a resposta é <code>200</code> com <code>[]</code> — não é erro, é uma coleção sem itens (mesma ideia da parte 3 da trilha API REST: coleção existe, só não tem itens ainda).</p>
+
+  <h2 id="rota-post">6. Rota POST /alunos</h2>
+  <pre><code>app.post('/alunos', async (req, res) => {
+  const { nome, email, data_nascimento } = req.body;
+
+  if (!nome || !email || !data_nascimento) {
+    return res.status(400).json({
+      erro: 'nome, email e data_nascimento são obrigatórios',
+    });
+  }
+
+  const resultado = await pool.query(
+    'INSERT INTO alunos (nome, email, data_nascimento) VALUES ($1, $2, $3) RETURNING *',
+    [nome, email, data_nascimento]
+  );
+
+  const alunoCriado = resultado.rows[0];
+
+  res
+    .status(201)
+    .location(`/alunos/${alunoCriado.id}`)
+    .json(alunoCriado);
+});</code></pre>
+  <p>Passo a passo:</p>
+  <ul>
+    <li><strong>Validação de forma</strong> (parte 5, seção 6): confere se os 3 campos obrigatórios vieram, antes de tocar no banco. Falhando, devolve <code>400 Bad Request</code> — nem chega perto de um <code>INSERT</code>.</li>
+    <li><strong><code>RETURNING *</code></strong>: cláusula do Postgres que devolve a linha recém-inserida (com o <code>id</code> que o <code>SERIAL</code> gerou, e o <code>criado_em</code> que o <code>DEFAULT NOW()</code> preencheu) — sem isso, o <code>INSERT</code> não devolveria nada útil pro código.</li>
+    <li><strong><code>res.status(201).location(...).json(...)</code></strong>: encadeamento de métodos do Express. Define status <code>201 Created</code>, o header <code>Location</code> apontando pro novo recurso (<code>/alunos/42</code>, por exemplo), e o body com o aluno criado — exatamente o que a parte 2 da trilha API REST (seção 3) descreveu como resposta correta de criação.</li>
+  </ul>
+
+  <h2 id="sql-injection">7. Por que usar $1, $2 em vez de concatenar string</h2>
+  <p>Repara que o SQL usa <code>$1</code>, <code>$2</code>, <code>$3</code> como marcadores de posição, e os valores reais vão num array separado — <strong>nunca</strong> direto dentro da string SQL:</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Nunca fazer isso</h4>
+      <pre><code>pool.query(
+  `INSERT INTO alunos (nome, email)
+   VALUES ('${nome}', '${email}')`
+)</code></pre>
+    </div>
+    <div class="good">
+      <h4>Sempre fazer isso</h4>
+      <pre><code>pool.query(
+  'INSERT INTO alunos (nome, email)
+   VALUES ($1, $2)',
+  [nome, email]
+)</code></pre>
+    </div>
+  </div>
+  <p>O motivo é segurança, não estilo: concatenar valor de entrada direto numa string SQL abre brecha pra <strong>SQL injection</strong> — se alguém mandar, no campo <code>nome</code>, algo como <code>' ); DROP TABLE alunos; --</code>, a concatenação vira SQL válido e destrutivo executado no seu banco. Usando <code>$1</code>/<code>$2</code> com array de valores separado (chamado de <em>query parametrizada</em>), a biblioteca <code>pg</code> trata qualquer coisa que vier do usuário como <strong>dado</strong>, nunca como comando SQL — não importa o que o valor contenha, ele nunca "escapa" pra virar instrução.</p>
+  <div class="warn"><p><strong>Isso não é opcional nem exagero</strong>: SQL injection está entre as vulnerabilidades mais exploradas historicamente em aplicações web. Toda consulta com valor vindo de fora (body, query string, params de rota) usa placeholder — sem exceção, mesmo em projeto de estudo.</p></div>
+
+  <h2 id="tratamento-erro">8. Um tratamento de erro mínimo</h2>
+  <p>Ainda não é o tratamento de erro centralizado completo da parte 5 (seção 7) — isso fica pra quando o projeto tiver mais de uma regra de negócio pra tratar (próxima parte). Por enquanto, um middleware de erro simples, no fim do arquivo, evita que qualquer falha (ex: tentar inserir e-mail duplicado, que o <code>UNIQUE</code> da parte 3 recusa) derrube o servidor sem resposta nenhuma pro cliente:</p>
+  <pre><code>app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ erro: 'Erro interno no servidor' });
+});</code></pre>
+  <p>Middleware de erro se reconhece pela assinatura de <strong>4 parâmetros</strong> (<code>err, req, res, next</code>) — é assim que o Express diferencia esse tipo de middleware dos outros. Precisa ser registrado <strong>por último</strong>, depois de todas as rotas.</p>
+  <div class="callout"><p>Testando agora: se você tentar cadastrar dois alunos com o mesmo e-mail, o <code>UNIQUE</code> do banco (parte 3, seção 5) vai recusar o segundo <code>INSERT</code>, o <code>pg</code> lança um erro, e esse middleware captura — mas devolve <code>500</code> genérico, quando o certo seria <code>409 Conflict</code> (parte 2, seção 6). Diferenciar "que tipo de erro de banco é esse" pra devolver o status certo é exatamente o assunto da próxima parte, quando o tratamento de erro for centralizado de verdade.</p></div>
+
+  <h2 id="codigo-completo">9. Código completo</h2>
+  <pre><code>// index.js
+require('dotenv').config();
+
+const express = require('express');
+const { Pool } = require('pg');
+
+const app = express();
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+app.use(express.json());
+
+app.get('/alunos', async (req, res) => {
+  const resultado = await pool.query('SELECT * FROM alunos ORDER BY id');
+  res.json(resultado.rows);
+});
+
+app.post('/alunos', async (req, res) => {
+  const { nome, email, data_nascimento } = req.body;
+
+  if (!nome || !email || !data_nascimento) {
+    return res.status(400).json({
+      erro: 'nome, email e data_nascimento são obrigatórios',
+    });
+  }
+
+  const resultado = await pool.query(
+    'INSERT INTO alunos (nome, email, data_nascimento) VALUES ($1, $2, $3) RETURNING *',
+    [nome, email, data_nascimento]
+  );
+
+  const alunoCriado = resultado.rows[0];
+
+  res
+    .status(201)
+    .location(`/alunos/${alunoCriado.id}`)
+    .json(alunoCriado);
+});
+
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ erro: 'Erro interno no servidor' });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Servidor rodando em http://localhost:${PORT}`);
+});</code></pre>
+
+  <h2 id="rodando">10. Rodando o servidor</h2>
+  <p>Com o Postgres no ar (<code>docker compose up -d</code>) e as dependências instaladas (guia de ambiente), roda:</p>
+  <pre><code>npm run dev</code></pre>
+  <p>Deve aparecer no terminal: <code>Servidor rodando em http://localhost:3000</code>. Como o script usa <code>nodemon</code>, qualquer alteração salva em <code>index.js</code> reinicia o servidor sozinho — não precisa parar e rodar de novo a cada mudança.</p>
+
+  <h2 id="testando">11. Testando com curl</h2>
+  <pre><code># lista vazia no início
+curl http://localhost:3000/alunos
+# []
+
+# cria um aluno
+curl -X POST http://localhost:3000/alunos \
+  -H "Content-Type: application/json" \
+  -d '{"nome": "Ana Silva", "email": "ana@example.com", "data_nascimento": "1995-04-12"}'
+# 201 Created, body com id, criado_em, e header Location: /alunos/1
+
+# lista de novo, aluno aparece
+curl http://localhost:3000/alunos
+
+# validação: falta campo obrigatório
+curl -X POST http://localhost:3000/alunos \
+  -H "Content-Type: application/json" \
+  -d '{"nome": "Sem email"}'
+# 400 Bad Request
+
+# UNIQUE do banco: tenta repetir o mesmo e-mail
+curl -X POST http://localhost:3000/alunos \
+  -H "Content-Type: application/json" \
+  -d '{"nome": "Outro Ana", "email": "ana@example.com", "data_nascimento": "2000-01-01"}'
+# 500 (esperado por enquanto — ver seção 8)</code></pre>
+  <p>Confirma também direto no banco, fora da API:</p>
+  <pre><code>docker compose exec db psql -U postgres -d estudo -c "SELECT * FROM alunos;"</code></pre>
+
+  <h2 id="erros-comuns">12. Erros comuns</h2>
+  <ol>
+    <li><strong><code>req.body</code> vem <code>undefined</code></strong> — esqueceu <code>app.use(express.json())</code>, ou esqueceu o header <code>Content-Type: application/json</code> no <code>curl</code>.</li>
+    <li><strong><code>DATABASE_URL</code> undefined, <code>Pool</code> tenta conectar em lugar errado</strong> — <code>require('dotenv').config()</code> precisa ser a <strong>primeira</strong> linha executada no arquivo, antes de qualquer outro <code>require</code> que dependa de variável de ambiente.</li>
+    <li><strong>Servidor não conecta no Postgres, erro <code>ECONNREFUSED</code></strong> — confirma que o container está rodando (<code>docker compose ps</code>); se acabou de reiniciar o computador, precisa rodar <code>docker compose up -d</code> de novo (o guia de ambiente cobre isso).</li>
+    <li><strong>Concatenar valor direto na string SQL</strong> — ver seção 7. Sempre <code>$1</code>/<code>$2</code> com array de valores.</li>
+    <li><strong>Servidor trava sem resposta numa requisição que dá erro</strong> — confirma que o middleware de erro (seção 8) está registrado <strong>depois</strong> de todas as rotas, não antes.</li>
+  </ol>
+
+  <h2 id="proximos-passos">13. O que vem a seguir</h2>
+  <p>Com o primeiro recorte funcionando de ponta a ponta (Express &rarr; Postgres &rarr; resposta), a trilha segue implementando o resto do projeto Studio Fit:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>CRUD completo</strong> de Instrutor e Aula, aplicando a Regra 3 (conflito de agenda) no código — e já separando em camadas (rotas/handlers/repository, parte 5 da trilha API REST), já que o projeto cresce demais pra um arquivo só.</li>
+      <li><strong>Matrícula e suas regras</strong>: o endpoint mais rico do projeto — Regra 1 (capacidade máxima) validada no código, tratamento de erro centralizado devolvendo <code>409</code>/<code>422</code> corretos em vez do <code>500</code> genérico de agora.</li>
+      <li><strong>Autenticação</strong>: login de aluno, proteção das rotas de matrícula.</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Quando o <code>GET</code> e o <code>POST</code> estiverem respondendo certo (incluindo os casos de erro testados na seção 11), volte com dúvidas — principalmente se algo no <code>pg</code> se comportar diferente do esperado, ou se quiser entender melhor por que o e-mail duplicado ainda devolve <code>500</code> em vez de <code>409</code> por enquanto.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>
