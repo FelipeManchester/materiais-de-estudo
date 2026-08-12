@@ -72,7 +72,7 @@
   <div class="entity-card">
     <h3>Aluno</h3>
     <div class="meta">Recurso de topo — <code>/alunos</code></div>
-    <p>Campos: <code>id</code>, <code>nome</code>, <code>email</code> (único), <code>data_nascimento</code>, <code>criado_em</code>.</p>
+    <p>Campos: <code>id</code>, <code>nome</code>, <code>email</code> (único), <code>data_nascimento</code>, <code>senha_hash</code>, <code>criado_em</code>.</p>
   </div>
 
   <div class="entity-card">
@@ -174,7 +174,7 @@
   <p>Erro de validação de forma → <code>400 Bad Request</code>. Regra de negócio da seção 5 quebrada → <code>409</code> ou <code>422</code>, conforme já especificado em cada regra.</p>
 
   <h2 id="autenticacao-prevista">8. Autenticação (prevista, não agora)</h2>
-  <p>Ainda não implementada nesta fase — fica planejada aqui só pra próxima parte da trilha já ter contexto pronto:</p>
+  <p>Implementada na parte 7 da trilha (<a href="07-autenticacao-jwt.html">Autenticação com JWT</a>) — descrição abaixo mantida como estava na hora em que virou spec, pra registrar a intenção original:</p>
   <ul>
     <li>Aluno se autentica pra ver/cancelar as próprias matrículas.</li>
     <li>Instrutor não precisa de login neste escopo (cadastro de instrutor é feito por quem administra o sistema).</li>

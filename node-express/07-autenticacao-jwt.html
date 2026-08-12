@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Autenticação com JWT</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="06-matricula-e-regras.html">&larr; 6. Matrícula e suas regras</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-que-vamos-construir">1. O que vamos construir</a></li>
+    <li><a href="#autenticacao-vs-autorizacao">2. Autenticação vs. autorização</a></li>
+    <li><a href="#o-que-e-jwt">3. O que é JWT</a></li>
+    <li><a href="#fluxo-jwt">4. O fluxo completo, passo a passo</a></li>
+    <li><a href="#senhas-hash">5. Senhas: nunca em texto puro</a></li>
+    <li><a href="#alterando-schema">6. Alterando o schema: coluna senha_hash</a></li>
+    <li><a href="#dependencias">7. Instalando as dependências</a></li>
+    <li><a href="#servico-senha">8. Um lugar só pra hash: services/senhaService.js</a></li>
+    <li><a href="#cadastro-com-senha">9. Cadastro de aluno agora exige senha</a></li>
+    <li><a href="#buscar-por-email">10. Repository: buscarPorEmail</a></li>
+    <li><a href="#rota-login">11. Rota de login: POST /auth/login</a></li>
+    <li><a href="#middleware-autenticar">12. Middleware de autenticação</a></li>
+    <li><a href="#protegendo-matriculas">13. Protegendo as rotas de matrícula</a></li>
+    <li><a href="#codigo-completo">14. Código completo dos arquivos alterados</a></li>
+    <li><a href="#testando">15. Testando o fluxo completo com curl</a></li>
+    <li><a href="#erros-comuns">16. Erros comuns</a></li>
+    <li><a href="#proximos-passos">17. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="08-refresh-token.html">8. Refresh token &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 7</div>
+  <h1>Autenticação com JWT</h1>
+  <p class="subtitle">Até agora, qualquer requisição podia matricular ou cancelar em nome de <strong>qualquer</strong> aluno — bastava passar um <code>aluno_id</code> diferente no body. Essa parte fecha essa brecha: o aluno faz login, recebe um token, e as rotas de matrícula passam a confiar só nesse token pra saber quem está pedindo.</p>
+
+  <h2 id="o-que-vamos-construir">1. O que vamos construir</h2>
+  <p>Do que ficou planejado lá na parte 2 (seção "Autenticação, prevista, não agora"), o escopo é deliberadamente pequeno:</p>
+  <ul>
+    <li>Aluno se autentica (login com email + senha) pra ver/cancelar as <strong>próprias</strong> matrículas.</li>
+    <li>Instrutor não precisa de login neste escopo — cadastro de instrutor continua sendo feito por quem administra o sistema, sem rota protegida.</li>
+    <li>Sem "papéis" complexos (admin, instrutor autenticado, etc.) — só <strong>autenticado</strong> vs. <strong>não autenticado</strong>, pras rotas que precisam identificar um aluno específico.</li>
+  </ul>
+  <p>Concretamente, três coisas mudam: (1) cadastro de aluno passa a exigir uma senha, guardada com hash; (2) uma rota nova, <code>POST /auth/login</code>, troca email+senha por um token; (3) as rotas de matrícula passam a exigir esse token, e usam o aluno identificado nele — nunca mais um <code>aluno_id</code> vindo solto do body.</p>
+
+  <h2 id="autenticacao-vs-autorizacao">2. Autenticação vs. autorização</h2>
+  <p>Dois conceitos parecidos, frequentemente confundidos, que esta parte implementa os dois:</p>
+  <table>
+    <thead><tr><th>Conceito</th><th>Pergunta que responde</th><th>Onde aparece aqui</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Autenticação</strong></td><td>Quem é você?</td><td><code>POST /auth/login</code> — prova identidade com email + senha, recebe um token.</td></tr>
+      <tr><td><strong>Autorização</strong></td><td>O que você pode fazer, sendo quem você é?</td><td>Middleware de matrícula — aluno autenticado só pode cancelar/ver <strong>as próprias</strong> matrículas, não as de outro aluno.</td></tr>
+    </tbody>
+  </table>
+  <p>Um sistema pode ter autenticação sem autorização refinada (todo mundo logado pode fazer tudo) ou, mais raro, autorização sem autenticação individual (uma chave de API compartilhada que libera um conjunto fixo de ações). Aqui os dois andam juntos: primeiro prova quem é (autenticação), depois cada rota decide se aquele "quem" pode fazer aquilo (autorização).</p>
+
+  <h2 id="o-que-e-jwt">3. O que é JWT</h2>
+  <p><strong>JWT</strong> (JSON Web Token) é um formato de token auto-contido: carrega dentro dele mesmo a informação de quem é o usuário, sem o servidor precisar guardar nada em memória ou banco pra saber quem fez login. Um JWT é uma string com três partes separadas por ponto:</p>
+  <pre><code>eyJhbGciOiJIUzI1NiJ9.eyJhbHVub19pZCI6M30.4f8a2c1e9b7d6a3f5e2c1b0a9d8e7f6c5b4a3d2e1f0
+
+⬑ header ⬑ payload ⬑ signature</code></pre>
+  <table>
+    <thead><tr><th>Parte</th><th>Conteúdo</th><th>Codificação</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Header</strong></td><td>Qual algoritmo assinou o token (ex: <code>HS256</code>) e que é um JWT.</td><td>Base64URL — só codificado, não é segredo.</td></tr>
+      <tr><td><strong>Payload</strong></td><td>As <em>claims</em>: dados que você decide colocar. Aqui: <code>aluno_id</code>, mais <code>iat</code> (emitido em) e <code>exp</code> (expira em), adicionados automaticamente.</td><td>Base64URL — também <strong>não é segredo</strong>, ver aviso abaixo.</td></tr>
+      <tr><td><strong>Signature</strong></td><td>Um HMAC do header + payload, calculado com um segredo que <strong>só o servidor conhece</strong> (<code>JWT_SECRET</code>).</td><td>Garante integridade: se alguém alterar um byte do payload, a assinatura não bate mais.</td></tr>
+    </tbody>
+  </table>
+  <div class="warn">
+    <p><strong>JWT não é criptografado, só assinado.</strong> Header e payload são só Base64 — qualquer um pode rodar <code>Buffer.from(parte, 'base64').toString()</code> no Node (ou usar qualquer decodificador JWT online) e ler o conteúdo puro. A assinatura garante que <strong>ninguém alterou</strong> o payload sem o servidor perceber — não garante que o payload é <strong>secreto</strong>. Por isso: nunca coloque senha, dado sensível ou qualquer coisa que precise ficar confidencial dentro do payload de um JWT. Aqui, só vai <code>aluno_id</code> — um número que já é público (aparece nas URIs desde a parte 3 da trilha API REST).</p>
+  </div>
+  <p>Essa característica — o servidor não guarda nenhum estado de sessão, só verifica uma assinatura a cada requisição — conecta direto com a restrição <strong>stateless</strong> descrita na parte 1 da trilha API REST (tese de Fielding): cada requisição precisa conter tudo que o servidor precisa pra entendê-la, sem depender de contexto guardado de requisições anteriores. É o oposto do modelo clássico de sessão (cookie + tabela de sessões no servidor, que precisa ser consultada a cada requisição pra saber quem é o usuário). JWT é a forma mais comum de aplicar "stateless" à autenticação numa API REST — por isso a escolha aqui, e não sessões.</p>
+
+  <h2 id="fluxo-jwt">4. O fluxo completo, passo a passo</h2>
+  <div class="step">
+    <div class="step-number">1</div>
+    <h3>Login</h3>
+    <p>Aluno manda <code>POST /auth/login</code> com <code>email</code> e <code>senha</code>.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">2</div>
+    <h3>Servidor confere e assina</h3>
+    <p>Servidor busca o aluno pelo email, compara a senha recebida com o hash guardado. Se bater, gera um JWT assinado com <code>JWT_SECRET</code> e devolve no corpo da resposta.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">3</div>
+    <h3>Cliente guarda o token</h3>
+    <p>Cabe ao cliente (front-end, app, ou o próprio curl nos nossos testes) guardar esse token em algum lugar — fora do escopo do backend, mas tipicamente <code>localStorage</code> ou memória da aplicação.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">4</div>
+    <h3>Cliente reenvia o token</h3>
+    <p>Em toda requisição a uma rota protegida, o cliente manda o token no header <code>Authorization: Bearer &lt;token&gt;</code>.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">5</div>
+    <h3>Servidor verifica</h3>
+    <p>Um middleware extrai o token do header, confere a assinatura e a validade (não expirou). Se ok, segue com a requisição sabendo quem é o aluno. Se não, <code>401</code> antes de chegar na rota.</p>
+  </div>
+
+  <h2 id="senhas-hash">5. Senhas: nunca em texto puro</h2>
+  <p>Guardar a senha do jeito que o aluno digitou, direto na coluna do banco, é o tipo de erro que vira manchete quando o banco vaza. A prática correta é guardar um <strong>hash</strong> — o resultado de uma função que transforma a senha numa sequência que não dá pra reverter de volta pra senha original.</p>
+  <p>Vamos usar <strong>bcrypt</strong>, feito especificamente pra senhas (diferente de um hash genérico tipo <code>SHA-256</code>, que é rápido demais — bom pra checar integridade de arquivo, ruim pra senha, porque um atacante consegue testar bilhões de combinações por segundo). Duas características do bcrypt que importam:</p>
+  <ul>
+    <li><strong>Deliberadamente lento</strong> — tem um "custo" configurável (número de rounds) que controla quanto tempo de CPU cada hash consome. Lento pra você (uma vez por login) é lento também pro atacante testando senha por senha.</li>
+    <li><strong>Salt embutido automaticamente</strong> — cada hash gerado é único, mesmo pra duas senhas idênticas. Isso impede um atacante de usar uma tabela pré-calculada (rainbow table) pra descobrir várias senhas de uma vez só.</li>
+  </ul>
+  <p>Duas operações, nunca uma terceira: <code>bcrypt.hash(senha, custo)</code> no cadastro (gera o hash a guardar) e <code>bcrypt.compare(senhaDigitada, hashGuardado)</code> no login (confere se bate, sem nunca "desfazer" o hash — bcrypt é uma via de mão única, não existe <code>bcrypt.decrypt</code>).</p>
+
+  <h2 id="alterando-schema">6. Alterando o schema: coluna senha_hash</h2>
+  <p>A tabela <code>alunos</code> (parte 3) não previa senha. Como a tabela já existe e já tem dados das partes anteriores, não dá pra simplesmente recriar o <code>CREATE TABLE</code> — usa <code>ALTER TABLE</code> pra adicionar a coluna:</p>
+  <pre><code>ALTER TABLE alunos ADD COLUMN senha_hash VARCHAR(60);</code></pre>
+  <div class="rule">
+    <span class="tag">Por que não NOT NULL aqui</span>
+    <p>Um hash bcrypt sempre tem 60 caracteres (por isso <code>VARCHAR(60)</code>), mas a coluna fica <strong>opcional</strong> por enquanto — se fosse <code>NOT NULL</code>, o <code>ALTER TABLE</code> falharia pros alunos que você já cadastrou nas partes anteriores (eles não têm valor pra essa coluna nova). Alunos antigos ficam com <code>senha_hash</code> igual a <code>NULL</code> e simplesmente não conseguem logar até você recriá-los (seção 15) ou fazer um <code>UPDATE</code> manual. Em produção isso seria resolvido com um fluxo de "defina sua senha" pros usuários existentes — fora do escopo de material de estudo.</p>
+  </div>
+  <p>Rode direto no <code>psql</code> (<code>docker compose exec -T db psql -U postgres -d estudo</code>, igual você já fez pra outras alterações) ou no DBeaver, do mesmo jeito que criou as tabelas na parte 3.</p>
+
+  <h2 id="dependencias">7. Instalando as dependências</h2>
+  <pre><code>npm install jsonwebtoken bcryptjs</code></pre>
+  <p><code>bcryptjs</code>, não <code>bcrypt</code>: mesma API, mas implementado em JavaScript puro, sem depender de compilar código nativo na instalação (o <code>bcrypt</code> original usa bindings em C++ via <code>node-gyp</code>, que às vezes dá dor de cabeça em máquinas sem as ferramentas de build certas). Pra estudo — e pra maioria dos projetos de porte pequeno/médio — a diferença de performance não justifica a complexidade extra de instalação.</p>
+  <p>Adicione o segredo do JWT no <code>.env</code> (já protegido pelo <code>.gitignore</code> desde a parte 1):</p>
+  <pre><code># .env
+JWT_SECRET=cole_aqui_uma_string_aleatoria_grande</code></pre>
+  <p>Pra gerar uma string aleatória forte, sem depender de nenhum site externo:</p>
+  <pre><code>node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"</code></pre>
+  <div class="warn">
+    <p>O <code>JWT_SECRET</code> nunca deve estar escrito direto no código (só no <code>.env</code>, fora do controle de versão). Qualquer um que conheça esse segredo consegue forjar um token válido pra qualquer <code>aluno_id</code> — é literalmente a chave que garante que só o seu servidor emite tokens confiáveis.</p>
+  </div>
+
+  <h2 id="servico-senha">8. Um lugar só pra hash: services/senhaService.js</h2>
+  <p><code>bcrypt.hash</code> e <code>bcrypt.compare</code> não têm nada de específico de aluno — são operações genéricas de senha, que qualquer entidade futura com login (um instrutor, por exemplo) vai precisar chamar do mesmo jeito. Em vez de importar <code>bcryptjs</code> direto dentro de cada arquivo de rota, isola numa camada nova, <code>services/</code> — o mesmo nome de camada que a parte 5 já tinha cogitado e decidido adiar, só que agora com um caso concreto pra justificar:</p>
+  <pre><code>// services/senhaService.js
+const bcrypt = require('bcryptjs');
+
+async function hashSenha(senha) {
+  return bcrypt.hash(senha, 10);
+}
+
+async function compararSenha(senha, hash) {
+  return bcrypt.compare(senha, hash);
+}
+
+module.exports = { hashSenha, compararSenha };</code></pre>
+  <div class="rule">
+    <span class="tag">Por que isso é diferente de "criar camada de service agora"</span>
+    <p>Não é uma camada de negócio nova pro projeto inteiro — é só duas funções genéricas (hash e comparação de senha) que não pertencem a <code>repositories/</code> (não é SQL) nem deveriam ficar repetidas dentro de cada <code>routes/*.js</code> que precisar de senha no futuro. Continua sem existir <code>alunosService.js</code>, <code>authService.js</code> ou qualquer coisa que já assuma como vai funcionar o login de outra entidade — isso fica pra quando (se) esse requisito aparecer de verdade. <code>senhaService.js</code> não sabe nem precisa saber o que é um "aluno".</p>
+  </div>
+  <p>O <code>10</code> passado pra <code>bcrypt.hash</code> é o custo (rounds) mencionado na seção 5 — fica escondido dentro do service, quem chama <code>hashSenha</code> não precisa saber (nem lembrar) desse detalhe.</p>
+
+  <h2 id="cadastro-com-senha">9. Cadastro de aluno agora exige senha</h2>
+  <p><code>POST /alunos</code> (parte 4) passa a exigir <code>senha</code> no body, e guarda o hash — nunca a senha recebida:</p>
+  <pre><code>// routes/alunos.js
+const { hashSenha } = require('../services/senhaService');
+
+router.post('/', async (req, res) => {
+  const { nome, email, data_nascimento, senha } = req.body;
+
+  if (!nome || !email || !data_nascimento || !senha) {
+    return res.status(400).json({
+      erro: 'nome, email, data_nascimento e senha são obrigatórios',
+    });
+  }
+
+  const senha_hash = await hashSenha(senha);
+
+  const alunoCriado = await alunosRepository.criar({
+    nome,
+    email,
+    data_nascimento,
+    senha_hash,
+  });
+
+  res.status(201).location(`/alunos/${alunoCriado.id}`).json(alunoCriado);
+});</code></pre>
+  <div class="rule">
+    <span class="tag">Por que a resposta não devolve senha_hash</span>
+    <p><code>alunoCriado</code> vem do <code>RETURNING *</code> do repository, então tecnicamente inclui <code>senha_hash</code>. Deixar isso vazar na resposta JSON — mesmo sendo um hash, não a senha original — é prática ruim: dá material de sobra pra um atacante tentar quebrar offline. A repository fica igual (retorna a linha inteira, é a forma mais simples), mas voltaremos nisso na seção 14 pra remover o campo antes de responder.</p>
+  </div>
+
+  <h2 id="buscar-por-email">10. Repository: buscarPorEmail</h2>
+  <p>Login busca o aluno pelo email (não tem outro jeito de saber o <code>id</code> antes de autenticar). Adiciona em <code>alunosRepository.js</code>:</p>
+  <pre><code>// repositories/alunosRepository.js
+async function buscarPorEmail(email) {
+  const query = 'SELECT * FROM alunos WHERE email = $1';
+  const resultado = await pool.query(query, [email]);
+
+  return resultado.rows[0];
+}</code></pre>
+  <p>E o <code>criar</code> passa a receber e gravar <code>senha_hash</code>:</p>
+  <pre><code>// repositories/alunosRepository.js
+async function criar({ nome, email, data_nascimento, senha_hash }) {
+  const query =
+    'INSERT INTO alunos (nome, email, data_nascimento, senha_hash) VALUES ($1, $2, $3, $4) RETURNING *';
+  const resultado = await pool.query(query, [nome, email, data_nascimento, senha_hash]);
+
+  return resultado.rows[0];
+}</code></pre>
+
+  <h2 id="rota-login">11. Rota de login: POST /auth/login</h2>
+  <p>Arquivo novo, <code>routes/auth.js</code>:</p>
+  <pre><code>// routes/auth.js
+const express = require('express');
+const jwt = require('jsonwebtoken');
+const { compararSenha } = require('../services/senhaService');
+const alunosRepository = require('../repositories/alunosRepository');
+
+const router = express.Router();
+
+router.post('/login', async (req, res) => {
+  const { email, senha } = req.body;
+
+  if (!email || !senha) {
+    return res.status(400).json({ erro: 'email e senha são obrigatórios' });
+  }
+
+  const aluno = await alunosRepository.buscarPorEmail(email);
+  if (!aluno) {
+    return res.status(401).json({ erro: 'email ou senha inválidos' });
+  }
+
+  const senhaValida = await compararSenha(senha, aluno.senha_hash);
+  if (!senhaValida) {
+    return res.status(401).json({ erro: 'email ou senha inválidos' });
+  }
+
+  const token = jwt.sign({ aluno_id: aluno.id }, process.env.JWT_SECRET, {
+    expiresIn: '2h',
+  });
+
+  res.json({ token });
+});
+
+module.exports = router;</code></pre>
+  <div class="rule">
+    <span class="tag">Por que a mesma mensagem de erro nos dois casos</span>
+    <p>"Email não existe" e "senha errada" devolvem o <strong>mesmo</strong> <code>401</code> com a mesma mensagem genérica. De propósito: se as mensagens fossem diferentes ("email não encontrado" vs. "senha incorreta"), alguém tentando invadir contas conseguiria descobrir, testando emails em sequência, quais estão cadastrados no sistema (enumeração de usuários) — mesmo sem nunca acertar a senha. Mensagem genérica fecha esse vazamento de informação.</p>
+  </div>
+  <p><code>jwt.sign(payload, segredo, opções)</code> monta e assina o token. <code>expiresIn: '2h'</code> adiciona automaticamente a claim <code>exp</code> no payload — depois de 2 horas, <code>jwt.verify</code> (próxima seção) passa a rejeitar esse token mesmo com assinatura válida, obrigando novo login. Sem expiração, um token vazado uma vez seria válido pra sempre.</p>
+
+  <h2 id="middleware-autenticar">12. Middleware de autenticação</h2>
+  <p>Arquivo novo, <code>middlewares/autenticar.js</code> — um middleware "de guarda", que roda <strong>antes</strong> do handler da rota e decide se deixa passar:</p>
+  <pre><code>// middlewares/autenticar.js
+const jwt = require('jsonwebtoken');
+
+function autenticar(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) {
+    return res.status(401).json({ erro: 'Token não enviado' });
+  }
+
+  const [tipo, token] = authHeader.split(' ');
+
+  if (tipo !== 'Bearer' || !token) {
+    return res.status(401).json({ erro: 'Formato de token inválido' });
+  }
+
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    req.alunoId = payload.aluno_id;
+    next();
+  } catch {
+    return res.status(401).json({ erro: 'Token inválido ou expirado' });
+  }
+}
+
+module.exports = autenticar;</code></pre>
+  <p><code>Authorization: Bearer &lt;token&gt;</code> é a convenção padrão (RFC 6750) pra mandar esse tipo de token — "Bearer" (portador) indica que quem carrega o token tem acesso, sem verificação extra de identidade além da assinatura. <code>authHeader.split(' ')</code> separa a palavra <code>Bearer</code> do token em si.</p>
+  <p><code>jwt.verify</code> faz duas coisas de uma vez: confere se a assinatura bate com o <code>JWT_SECRET</code> (ninguém adulterou o payload) e se o token não expirou. Qualquer uma das duas falhando, ele <strong>lança uma exceção</strong> — por isso o <code>try/catch</code>, diferente da maioria dos middlewares desta trilha que só retornam valores.</p>
+  <div class="rule">
+    <span class="tag">Por que catch sem parênteses aqui</span>
+    <p>Repare que é <code>catch {</code>, não <code>catch (err) {</code> como no <code>POST /aulas/:id/matriculas</code> da parte 6. Lá, o erro <strong>era usado</strong> — precisávamos ler <code>err.code</code> pra distinguir a violação de unicidade (<code>23505</code>) de qualquer outro problema. Aqui, não interessa <em>qual</em> das falhas aconteceu: assinatura errada, token adulterado ou prazo vencido, a resposta é a mesma <code>401</code>. Declarar uma variável que ninguém lê é ruído, e o ESLint configurado na parte 4 reclama disso (<code>'err' is defined but never used</code>). O JavaScript permite omitir o parâmetro inteiro desde 2019 — chama-se <em>optional catch binding</em>, e diz explicitamente "sei que deu erro, não preciso saber qual".</p>
+    <p>Detalhe que pega muita gente: renomear pra <code>_err</code> <strong>não</strong> silencia o aviso. O <code>argsIgnorePattern: "^_"</code> que configuramos vale só pra argumentos de função — parâmetro de <code>catch</code> tem opção própria (<code>caughtErrorsIgnorePattern</code>), que não configuramos. Omitir de vez resolve sem mexer em configuração nenhuma.</p>
+  </div>
+  <p>Se tudo bater, o middleware guarda o <code>aluno_id</code> do payload em <code>req.alunoId</code> e chama <code>next()</code> — a rota protegida usa <code>req.alunoId</code>, nunca mais precisa (nem deve) confiar em algo vindo do body ou da URI pra saber quem é o aluno autenticado.</p>
+
+  <h2 id="protegendo-matriculas">13. Protegendo as rotas de matrícula</h2>
+  <p>Um middleware só roda numa rota se for passado como argumento dela. Adiciona <code>autenticar</code> nas três rotas que precisam saber quem é o aluno:</p>
+  <pre><code>// routes/aulas.js
+const autenticar = require('../middlewares/autenticar');
+
+router.post('/:id/matriculas', autenticar, async (req, res, next) => {
+  const aula = await aulasRepository.buscarPorId(req.params.id);
+  if (!aula) {
+    return res.status(404).json({ erro: 'Aula não encontrada' });
+  }
+
+  const totalConfirmadas = await matriculasRepository.contarConfirmadas(aula.id);
+  if (totalConfirmadas >= aula.capacidade_maxima) {
+    return res.status(409).json({ erro: 'Aula sem vagas disponíveis' });
+  }
+
+  try {
+    const matriculaCriada = await matriculasRepository.criar({
+      aluno_id: req.alunoId,
+      aula_id: aula.id,
+    });
+
+    res
+      .status(201)
+      .location(`/aulas/${aula.id}/matriculas/${matriculaCriada.id}`)
+      .json(matriculaCriada);
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ erro: 'Aluno já matriculado nesta aula' });
+    }
+    next(err);
+  }
+});</code></pre>
+  <div class="rule">
+    <span class="tag">O que sumiu desta rota</span>
+    <p>Repare que a checagem <code>alunosRepository.buscarPorId(aluno_id)</code> → <code>422</code> (parte 6, seção 7) não existe mais aqui. Antes, <code>aluno_id</code> vinha do body — qualquer número, precisava validar se existia. Agora <code>aluno_id</code> vem de <code>req.alunoId</code>, que só existe porque o middleware já validou um token assinado pelo próprio servidor pra um aluno que existia no momento do login. A validação de "existência do aluno" foi substituída por uma garantia mais forte: autenticação.</p>
+  </div>
+  <p>Cancelamento (<code>PATCH .../matriculas/:matriculaId</code>) ganha uma checagem de <strong>autorização</strong> nova — não basta a matrícula existir, ela precisa pertencer ao aluno autenticado:</p>
+  <pre><code>// routes/aulas.js
+router.patch('/:id/matriculas/:matriculaId', autenticar, async (req, res) => {
+  const { status } = req.body;
+
+  if (status !== 'cancelada') {
+    return res.status(400).json({ erro: "status precisa ser 'cancelada'" });
+  }
+
+  const matricula = await matriculasRepository.buscarPorIdEAula(
+    req.params.matriculaId,
+    req.params.id,
+  );
+
+  if (!matricula) {
+    return res.status(404).json({ erro: 'Matrícula não encontrada' });
+  }
+
+  if (matricula.aluno_id !== req.alunoId) {
+    return res.status(403).json({
+      erro: 'Você não pode cancelar a matrícula de outro aluno',
+    });
+  }
+
+  const matriculaCancelada = await matriculasRepository.cancelar(matricula.id);
+  res.json(matriculaCancelada);
+});</code></pre>
+  <div class="rule">
+    <span class="tag">404 vs. 403, e por que essa ordem</span>
+    <p>Primeiro confere se a matrícula existe (<code>404</code>), só depois se pertence a quem está pedindo (<code>403</code>). Fazer na ordem inversa vazaria informação: um <code>403</code> pra um <code>matriculaId</code> que nem existe confirmaria pro atacante que aquele ID é válido (só não é dele). Confirmar existência antes de checar posse é o mesmo raciocínio de "não vazar informação" da seção 11 — só que aqui é sobre IDs, não sobre emails.</p>
+  </div>
+  <p>E a consulta "em que aulas o aluno X está matriculado" (<code>routes/alunos.js</code>) também exige o próprio aluno — <code>req.params.id</code> (da URI) precisa bater com <code>req.alunoId</code> (do token):</p>
+  <pre><code>// routes/alunos.js
+const autenticar = require('../middlewares/autenticar');
+
+router.get('/:id/matriculas', autenticar, async (req, res) => {
+  if (Number(req.params.id) !== req.alunoId) {
+    return res.status(403).json({
+      erro: 'Você não pode ver as matrículas de outro aluno',
+    });
+  }
+
+  const aluno = await alunosRepository.buscarPorId(req.params.id);
+  if (!aluno) {
+    return res.status(404).json({ erro: 'Aluno não encontrado' });
+  }
+
+  const matriculas = await matriculasRepository.listarPorAluno(req.params.id);
+  res.json(matriculas);
+});</code></pre>
+  <div class="warn">
+    <p><code>req.params.id</code> é sempre <strong>string</strong> (tudo que vem da URI é texto). <code>req.alunoId</code> é <strong>number</strong> (veio do payload do JWT, que preserva o tipo original do <code>jwt.sign</code>). Comparar com <code>!==</code> sem converter (<code>Number(req.params.id) !== req.alunoId</code>) faria <code>"3" !== 3</code> ser sempre <code>true</code> — a checagem de autorização bloquearia até o dono da própria matrícula. Erro fácil de escrever, fácil de não notar em teste manual se você sempre testar só com o próprio ID.</p>
+  </div>
+  <p>Já <code>GET /aulas/:id/matriculas</code> (lista quem está matriculado numa aula, parte 6 seção 9) <strong>fica sem proteção</strong> por enquanto — não identifica um aluno específico fazendo a pergunta, é mais uma visão de "lista de chamada" da aula, que neste escopo não tem dono (não existe papel de instrutor autenticado ou admin ainda, seção 1). Registrado aqui como decisão consciente, não esquecimento — do mesmo jeito que a condição de corrida da Regra 1 (parte 6) e o soft-delete de instrutor ficaram documentados como próximos passos em vez de resolvidos "de qualquer jeito".</p>
+
+  <h2 id="codigo-completo">14. Código completo dos arquivos alterados</h2>
+  <p>Três arquivos novos e dois alterados. Primeiro os novos:</p>
+  <pre><code>// services/senhaService.js — arquivo completo
+const bcrypt = require('bcryptjs');
+
+async function hashSenha(senha) {
+  return bcrypt.hash(senha, 10);
+}
+
+async function compararSenha(senha, hash) {
+  return bcrypt.compare(senha, hash);
+}
+
+module.exports = { hashSenha, compararSenha };</code></pre>
+  <pre><code>// routes/auth.js — arquivo completo
+const express = require('express');
+const jwt = require('jsonwebtoken');
+const { compararSenha } = require('../services/senhaService');
+const alunosRepository = require('../repositories/alunosRepository');
+
+const router = express.Router();
+
+router.post('/login', async (req, res) => {
+  const { email, senha } = req.body;
+
+  if (!email || !senha) {
+    return res.status(400).json({ erro: 'email e senha são obrigatórios' });
+  }
+
+  const aluno = await alunosRepository.buscarPorEmail(email);
+  if (!aluno) {
+    return res.status(401).json({ erro: 'email ou senha inválidos' });
+  }
+
+  const senhaValida = await compararSenha(senha, aluno.senha_hash);
+  if (!senhaValida) {
+    return res.status(401).json({ erro: 'email ou senha inválidos' });
+  }
+
+  const token = jwt.sign({ aluno_id: aluno.id }, process.env.JWT_SECRET, {
+    expiresIn: '2h',
+  });
+
+  res.json({ token });
+});
+
+module.exports = router;</code></pre>
+  <pre><code>// middlewares/autenticar.js — arquivo completo
+const jwt = require('jsonwebtoken');
+
+function autenticar(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) {
+    return res.status(401).json({ erro: 'Token não enviado' });
+  }
+
+  const [tipo, token] = authHeader.split(' ');
+
+  if (tipo !== 'Bearer' || !token) {
+    return res.status(401).json({ erro: 'Formato de token inválido' });
+  }
+
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    req.alunoId = payload.aluno_id;
+    next();
+  } catch {
+    return res.status(401).json({ erro: 'Token inválido ou expirado' });
+  }
+}
+
+module.exports = autenticar;</code></pre>
+  <p><code>repositories/alunosRepository.js</code> — completo, com <code>senha_hash</code> no <code>criar</code> e o novo <code>buscarPorEmail</code>:</p>
+  <pre><code>// repositories/alunosRepository.js — arquivo completo
+const pool = require('../db/pool');
+
+async function listar() {
+  const query = 'SELECT id, nome, email, data_nascimento, criado_em FROM alunos ORDER BY id';
+  const resultado = await pool.query(query);
+  return resultado.rows;
+}
+
+async function criar({ nome, email, data_nascimento, senha_hash }) {
+  const query =
+    'INSERT INTO alunos (nome, email, data_nascimento, senha_hash) VALUES ($1, $2, $3, $4) RETURNING *';
+  const resultado = await pool.query(query, [nome, email, data_nascimento, senha_hash]);
+
+  return resultado.rows[0];
+}
+
+async function buscarPorId(id) {
+  const query = 'SELECT * FROM alunos WHERE id = $1';
+  const resultado = await pool.query(query, [id]);
+
+  return resultado.rows[0];
+}
+
+async function buscarPorEmail(email) {
+  const query = 'SELECT * FROM alunos WHERE email = $1';
+  const resultado = await pool.query(query, [email]);
+
+  return resultado.rows[0];
+}
+
+module.exports = { listar, criar, buscarPorId, buscarPorEmail };</code></pre>
+  <div class="rule">
+    <span class="tag">Por que listar não usa SELECT *</span>
+    <p><code>GET /alunos</code> devolve o resultado de <code>listar()</code> pra qualquer um que chamar a rota — nenhuma desestruturação depois, como fizemos no <code>criar</code> da seção 9. Se a query fosse <code>SELECT *</code>, o <code>senha_hash</code> (hash bcrypt de verdade, uma vez que existirem alunos cadastrados com senha) apareceria na lista pública. Listar só as colunas necessárias na própria query resolve na raiz — o hash nem sai do banco, não depende de lembrar de filtrar depois em cada lugar que usa esse resultado. <code>buscarPorId</code> e <code>buscarPorEmail</code> continuam com <code>SELECT *</code> de propósito: o primeiro nunca é devolvido direto numa resposta (só usado pra checar existência), o segundo <strong>precisa</strong> do <code>senha_hash</code> pra comparar no login (seção 11).</p>
+  </div>
+  <p><code>routes/alunos.js</code> — completo, com <code>senha</code> no cadastro, <code>senha_hash</code> removido da resposta (ver seção 9), e a rota de matrículas protegida:</p>
+  <pre><code>// routes/alunos.js — arquivo completo
+const express = require('express');
+const { hashSenha } = require('../services/senhaService');
+
+const alunosRepository = require('../repositories/alunosRepository');
+const matriculasRepository = require('../repositories/matriculasRepository');
+const autenticar = require('../middlewares/autenticar');
+
+const router = express.Router();
+
+router.get('/', async (req, res) => {
+  const alunos = await alunosRepository.listar();
+  res.json(alunos);
+});
+
+router.post('/', async (req, res) => {
+  const { nome, email, data_nascimento, senha } = req.body;
+
+  if (!nome || !email || !data_nascimento || !senha) {
+    return res.status(400).json({
+      erro: 'nome, email, data_nascimento e senha são obrigatórios',
+    });
+  }
+
+  const senha_hash = await hashSenha(senha);
+
+  const alunoCriado = await alunosRepository.criar({
+    nome,
+    email,
+    data_nascimento,
+    senha_hash,
+  });
+
+  const { senha_hash: _senhaHash, ...alunoSemSenha } = alunoCriado;
+
+  res.status(201).location(`/alunos/${alunoCriado.id}`).json(alunoSemSenha);
+});
+
+router.get('/:id/matriculas', autenticar, async (req, res) => {
+  if (Number(req.params.id) !== req.alunoId) {
+    return res.status(403).json({
+      erro: 'Você não pode ver as matrículas de outro aluno',
+    });
+  }
+
+  const aluno = await alunosRepository.buscarPorId(req.params.id);
+  if (!aluno) {
+    return res.status(404).json({ erro: 'Aluno não encontrado' });
+  }
+
+  const matriculas = await matriculasRepository.listarPorAluno(req.params.id);
+  res.json(matriculas);
+});
+
+module.exports = router;</code></pre>
+  <div class="rule">
+    <span class="tag">O truque do _senhaHash</span>
+    <p><code>const { senha_hash: _senhaHash, ...alunoSemSenha } = alunoCriado;</code> usa desestruturação pra separar <code>senha_hash</code> do resto do objeto — <code>alunoSemSenha</code> fica com todo o resto (<code>id</code>, <code>nome</code>, <code>email</code>...), sem o hash. A variável <code>_senhaHash</code> é descartada de propósito (o prefixo <code>_</code> já é reconhecido pelo ESLint configurado na parte 4/5, mesmo padrão usado pro <code>_next</code> do middleware de erro).</p>
+  </div>
+  <p>Por fim, <code>index.js</code> monta a nova rota de auth:</p>
+  <pre><code>// index.js
+require('dotenv').config();
+
+const express = require('express');
+
+const alunosRouter = require('./routes/alunos');
+const instrutoresRouter = require('./routes/instrutores');
+const aulasRouter = require('./routes/aulas');
+const authRouter = require('./routes/auth');
+
+const app = express();
+
+app.use(express.json());
+
+app.use('/alunos', alunosRouter);
+app.use('/instrutores', instrutoresRouter);
+app.use('/aulas', aulasRouter);
+app.use('/auth', authRouter);
+
+app.use((err, req, res, _next) => {
+  console.error(err);
+  res.status(500).json({ erro: 'Erro interno no servidor' });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Servidor rodando em http://localhost:${PORT}`);
+});</code></pre>
+  <p>As mudanças em <code>routes/aulas.js</code> (import do <code>autenticar</code> e os dois handlers de matrícula) já foram mostradas completas na seção 13 — nada além disso muda nesse arquivo.</p>
+
+  <h2 id="testando">15. Testando o fluxo completo com curl</h2>
+  <pre><code># cadastra um aluno novo, já com senha
+curl -X POST http://localhost:3000/alunos \
+  -H "Content-Type: application/json" \
+  -d '{"nome":"Carla Souza","email":"carla@example.com","data_nascimento":"1997-03-10","senha":"senha123"}'
+# 201, resposta sem senha_hash
+
+# login com credenciais certas
+curl -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"carla@example.com","senha":"senha123"}'
+# 200, {"token": "..."} — guarda esse token pros próximos comandos
+
+# login com senha errada
+curl -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"carla@example.com","senha":"errada"}'
+# 401, "email ou senha inválidos"
+
+# tenta matricular SEM token
+curl -X POST http://localhost:3000/aulas/1/matriculas \
+  -H "Content-Type: application/json" \
+  -d '{}'
+# 401, "Token não enviado"
+
+# matricula COM token (troque TOKEN_AQUI pelo token do login)
+curl -X POST http://localhost:3000/aulas/1/matriculas \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer TOKEN_AQUI"
+# 201 — aluno_id vem do token, nem precisou mandar no body
+
+# vê as próprias matrículas
+curl http://localhost:3000/alunos/SEU_ID/matriculas \
+  -H "Authorization: Bearer TOKEN_AQUI"
+# 200
+
+# tenta ver as matrículas de OUTRO aluno, com seu próprio token
+curl http://localhost:3000/alunos/1/matriculas \
+  -H "Authorization: Bearer TOKEN_AQUI"
+# 403, "Você não pode ver as matrículas de outro aluno" (se SEU_ID != 1)</code></pre>
+  <p>Pra testar o <code>403</code> no cancelamento: logue como um segundo aluno, pegue o <code>id</code> de uma matrícula que pertence ao <strong>primeiro</strong> aluno, e tente cancelar usando o token do segundo — deve dar <code>403</code>. Cancelando com o token do dono correto, <code>200</code>, igual testado na parte 6.</p>
+
+  <h2 id="erros-comuns">16. Erros comuns</h2>
+  <ol>
+    <li><strong>Esquecer o prefixo <code>Bearer </code> no header</strong> — mandar só o token cru faz <code>authHeader.split(' ')</code> devolver <code>[token, undefined]</code>, cai no <code>400</code>/<code>401</code> de "Formato de token inválido".</li>
+    <li><strong>Comparar <code>req.params.id</code> com <code>req.alunoId</code> sem <code>Number()</code></strong> — string nunca é <code>===</code> number em JS; checagem de autorização bloqueia até o dono correto (ver aviso da seção 13).</li>
+    <li><strong>Continuar confiando em <code>aluno_id</code> do body</strong> nas rotas de matrícula — reabre exatamente a brecha de segurança que esta parte veio fechar. Depois do <code>autenticar</code>, a única fonte confiável de "quem é o aluno" é <code>req.alunoId</code>.</li>
+    <li><strong>Esquecer <code>await</code> em <code>bcrypt.hash</code>/<code>bcrypt.compare</code></strong> — as duas são funções assíncronas; sem <code>await</code>, você grava/compara uma <code>Promise</code> em vez do valor real (bug silencioso: nenhum erro é lançado, só nada nunca bate).</li>
+    <li><strong><code>JWT_SECRET</code> ausente do <code>.env</code></strong> — <code>jwt.sign</code>/<code>jwt.verify</code> recebem <code>undefined</code> como segredo; funciona "por acidente" (token válido contra <code>undefined</code>), mas qualquer um sem o segredo real também consegue forjar tokens. Confira com <code>console.log(process.env.JWT_SECRET)</code> se desconfiar.</li>
+    <li><strong>Achar que o payload do JWT é secreto</strong> — não é (seção 3). Não é bug de código, é erro de modelo mental que leva a colocar dado sensível onde não devia.</li>
+  </ol>
+
+  <h2 id="proximos-passos">17. O que vem a seguir</h2>
+  <p>Com login, token e autorização básica funcionando, o núcleo do projeto Studio Fit definido na parte 2 está completo — as 4 entidades, as 4 regras de negócio, e a proteção das rotas de matrícula. Itens que ficam registrados como possíveis próximos passos, sem compromisso de ordem:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Refresh token</strong>: hoje o aluno precisa logar de novo a cada 2 horas; um fluxo de refresh evitaria isso sem aumentar a validade do token original.</li>
+      <li><strong>Testes automatizados</strong>: até aqui, todo teste foi manual via <code>curl</code> — uma suíte automatizada (ex: Jest + supertest) passaria a pegar regressões sem depender de reproduzir o fluxo na mão.</li>
+      <li><strong>Deploy em produção</strong>: rodar essa API fora da máquina local — variáveis de ambiente de produção, banco gerenciado, HTTPS.</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Quando terminar de testar o fluxo (cadastro com senha, login, matricular com token, tentar sem token, tentar mexer na matrícula de outro aluno), volta com dúvidas — principalmente se algum <code>401</code>/<code>403</code> aparecer onde você não esperava, ou se ficar em dúvida sobre por que o payload do JWT não é considerado seguro.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

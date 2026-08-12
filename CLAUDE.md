@@ -48,3 +48,12 @@ Repositório é público no GitHub. `README.md` na raiz lista as trilhas e arqui
 - Manter português, HTML semântico (h2/h3, table, blockquote) — não gerar Markdown solto.
 - Cada arquivo deve ser autocontido o suficiente para reler depois, mas pode referenciar conceitos de arquivos anteriores da mesma trilha assumindo que já foram lidos.
 - Não adiantar conteúdo de tópicos futuros já listados na seção "O que vem a seguir" do arquivo anterior — cada arquivo cobre seu escopo.
+
+### Blocos de código são instrução de edição, não só ilustração
+
+Quando um bloco de código representa uma **alteração em arquivo que já existe** no projeto do leitor, o comentário `// routes/aulas.js` no topo **não é suficiente**. Sem localização explícita, o leitor compara o bloco (estado final) com o próprio arquivo, não sabe o que é linha nova, alterada ou removida, e trava.
+
+- Antes do bloco, escrever a instrução em forma de passo de tutorial: **qual arquivo**, **onde dentro dele** (função, rota, bloco), e **a ação** — criar, alterar ou deletar. Ex: "Vá em `routes/aulas.js`, na rota `POST /:id/matriculas`. Apague a validação de `aluno_id` do body (as duas checagens, 400 e 422) e passe `aluno_id: req.alunoId` no `matriculasRepository.criar`."
+- Dentro do bloco, sinalizar o que mudou (comentário `// NOVO`, `// ALTERADO`, `// REMOVER`, ou trecho `// ...resto igual` pro que não muda) em vez de despejar o trecho já-pronto.
+- **Não recriar o arquivo inteiro no HTML** — fica gigante e sem necessidade. Mostrar só o trecho afetado, com a localização explícita. Arquivo completo só quando o arquivo é novo.
+- Vale pra toda trilha, não só `node-express/`.

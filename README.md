@@ -40,6 +40,8 @@ Trilha específica de stack (complementa a API REST, que é conceitual/independe
 4. [Primeiro endpoint funcional](node-express/04-primeiro-endpoint-funcional.html) — servidor Express conectado no Postgres via `pg`, `GET`/`POST /alunos` de verdade, query parametrizada contra SQL injection, teste manual com `curl`.
 5. [CRUD completo: Instrutor e Aula](node-express/05-crud-instrutor-aula.html) — projeto reorganizado em camadas (`routes/`, `repositories/`), Express Router, CRUD completo das duas entidades, e a Regra 3 (conflito de agenda) implementada com o operador `OVERLAPS` do Postgres.
 6. [Matrícula e suas regras](node-express/06-matricula-e-regras.html) — a entidade que liga aluno e aula: `JOIN` entre tabelas, Regra 1 (capacidade máxima) no código, Regra 2 (duplicidade) capturando erro do banco, Regra 4 (cancelamento nunca é `DELETE`).
+7. [Autenticação com JWT](node-express/07-autenticacao-jwt.html) — login de aluno com senha em hash (bcrypt), emissão e verificação de token JWT, e proteção das rotas de matrícula pra cada aluno só mexer nas próprias.
+8. [Refresh token](node-express/08-refresh-token.html) — access token curto + refresh token longo guardado em hash no banco, rotação a cada uso com detecção de reuso, e logout de verdade (revogação).
 
 ## Estrutura do repositório
 
@@ -61,7 +63,9 @@ estudo/
     ├── 03-schema-do-banco.html
     ├── 04-primeiro-endpoint-funcional.html
     ├── 05-crud-instrutor-aula.html
-    └── 06-matricula-e-regras.html
+    ├── 06-matricula-e-regras.html
+    ├── 07-autenticacao-jwt.html
+    └── 08-refresh-token.html
 ```
 
 Novas trilhas de estudo entram como novos diretórios na raiz, seguindo o mesmo padrão: arquivos HTML numerados em ordem de leitura.

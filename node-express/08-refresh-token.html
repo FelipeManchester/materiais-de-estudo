@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Refresh token</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="07-autenticacao-jwt.html">&larr; 7. Autenticação com JWT</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-problema">1. O problema: 2 horas, e o dilema da expiração</a></li>
+    <li><a href="#dois-tokens">2. Dois tokens, dois papéis</a></li>
+    <li><a href="#quebra-stateless">3. Isso quebra o stateless (e tudo bem)</a></li>
+    <li><a href="#por-que-opaco">4. Por que o refresh não é um JWT</a></li>
+    <li><a href="#rotacao">5. Rotação e detecção de reuso</a></li>
+    <li><a href="#fluxo">6. O fluxo completo, passo a passo</a></li>
+    <li><a href="#schema">7. Schema: tabela refresh_tokens</a></li>
+    <li><a href="#token-service">8. Gerar e guardar: services/tokenService.js</a></li>
+    <li><a href="#repository">9. Repository: refreshTokensRepository.js</a></li>
+    <li><a href="#emitir-tokens">10. Um lugar só pra emitir o par</a></li>
+    <li><a href="#login-atualizado">11. Login passa a devolver os dois tokens</a></li>
+    <li><a href="#rota-refresh">12. Rota nova: POST /auth/refresh</a></li>
+    <li><a href="#rota-logout">13. Rota nova: POST /auth/logout</a></li>
+    <li><a href="#testando">14. Testando o fluxo com curl</a></li>
+    <li><a href="#erros-comuns">15. Erros comuns</a></li>
+    <li><a href="#proximos-passos">16. O que vem a seguir</a></li>
+  </ol>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 8</div>
+  <h1>Refresh token</h1>
+  <p class="subtitle">Na parte 7 o token do aluno vale 2 horas. Passou disso, ele digita email e senha de novo. Diminuir esse prazo melhora a segurança e piora a experiência; aumentar faz o contrário. Esta parte quebra esse dilema com um segundo token — e, de quebra, resolve uma limitação que ficou em aberto: hoje não existe logout de verdade.</p>
+
+  <h2 id="o-problema">1. O problema: 2 horas, e o dilema da expiração</h2>
+  <p>Volta na seção 11 da parte 7, na linha que assina o token:</p>
+  <pre><code>const token = jwt.sign({ aluno_id: aluno.id }, process.env.JWT_SECRET, {
+  expiresIn: '2h',
+});</code></pre>
+  <p>Esse <code>'2h'</code> é um número escolhido no olho, equilibrando duas forças que puxam em direções opostas:</p>
+  <table>
+    <thead><tr><th>Se o prazo for <strong>curto</strong> (ex: 15 min)</th><th>Se o prazo for <strong>longo</strong> (ex: 30 dias)</th></tr></thead>
+    <tbody>
+      <tr><td>Token vazado tem pouco tempo de uso — o estrago é limitado.</td><td>Token vazado serve por um mês inteiro pro atacante.</td></tr>
+      <tr><td>O aluno digita a senha várias vezes por dia. Experiência ruim.</td><td>O aluno praticamente nunca reloga. Experiência boa.</td></tr>
+    </tbody>
+  </table>
+  <p>E não dá pra "cancelar" um JWT vazado no meio do caminho. Isso é consequência direta do que a parte 7 explicou na seção 3: o servidor não guarda nada sobre os tokens que emitiu. Ele recebe a string, confere a assinatura contra o <code>JWT_SECRET</code>, e pronto — não existe lista de tokens válidos pra remover uma entrada. O token é válido porque a matemática fecha, não porque alguém autorizou.</p>
+  <div class="warn">
+    <p><strong>Consequência prática que talvez tenha passado batido na parte 7:</strong> a API de hoje <strong>não tem logout</strong>. Você pode apagar o token no cliente (o front-end esquece a string), mas quem tiver copiado aquele token continua entrando até o prazo vencer. "Sair" hoje é um teatro do lado do cliente — o servidor não fica sabendo de nada.</p>
+  </div>
+  <p>A saída padrão da indústria não é escolher melhor o prazo. É usar <strong>dois</strong> tokens, com prazos e papéis diferentes.</p>
+
+  <h2 id="dois-tokens">2. Dois tokens, dois papéis</h2>
+  <p>O token que você já tem passa a se chamar <strong>access token</strong> e fica <em>curto</em>. Um segundo token, o <strong>refresh token</strong>, fica longo e serve pra uma coisa só: pedir um access token novo sem digitar senha.</p>
+  <table>
+    <thead><tr><th></th><th>Access token</th><th>Refresh token</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Pra que serve</strong></td><td>Provar quem é você em cada requisição protegida.</td><td>Trocar por um access token novo quando o atual expira.</td></tr>
+      <tr><td><strong>Validade</strong></td><td>Curta — vamos usar 15 minutos.</td><td>Longa — vamos usar 7 dias.</td></tr>
+      <tr><td><strong>Formato</strong></td><td>JWT assinado (igual à parte 7).</td><td>String aleatória opaca (seção 4).</td></tr>
+      <tr><td><strong>Vai em quais requisições</strong></td><td>Em todas as rotas protegidas, no header <code>Authorization</code>.</td><td>Só em <code>POST /auth/refresh</code> e <code>POST /auth/logout</code>, no body.</td></tr>
+      <tr><td><strong>Servidor guarda?</strong></td><td>Não guarda nada.</td><td>Guarda o <em>hash</em> dele no banco.</td></tr>
+      <tr><td><strong>Dá pra revogar?</strong></td><td>Não — só esperar os 15 min.</td><td><strong>Sim</strong> — é o que torna o logout real.</td></tr>
+    </tbody>
+  </table>
+  <p>Repare no ganho: o token que trafega o tempo todo (e portanto tem mais chance de vazar em log, histórico de proxy, extensão de navegador) agora vale 15 minutos. O token que vale 7 dias trafega raramente, e esse pode ser cancelado no banco a qualquer momento.</p>
+
+  <h2 id="quebra-stateless">3. Isso quebra o stateless (e tudo bem)</h2>
+  <p>Vale ser honesto sobre o custo, porque a parte 7 vendeu JWT justamente como a forma de aplicar a restrição <em>stateless</em> de Fielding (parte 1 da trilha API REST): guardar refresh token no banco é, literalmente, o servidor mantendo estado sobre sessões.</p>
+  <p>A diferença é <strong>onde</strong> esse estado é consultado:</p>
+  <div class="example">
+    <div class="good">
+      <h4>Continua stateless</h4>
+      <p>Todas as rotas protegidas (<code>POST /aulas/:id/matriculas</code>, <code>GET /alunos/:id/matriculas</code>, ...) seguem só verificando a assinatura do access token. Zero consulta ao banco pra saber quem é o aluno.</p>
+    </div>
+    <div class="bad">
+      <h4>Vira stateful</h4>
+      <p>Só <code>POST /auth/refresh</code> e <code>POST /auth/logout</code> vão ao banco. Uma vez a cada 15 minutos, contra todas as outras requisições do período.</p>
+    </div>
+  </div>
+  <p>É um trade-off consciente, do mesmo tipo que a parte 6 fez ao aceitar a condição de corrida da Regra 1: você abre mão de pureza arquitetural num ponto pequeno e localizado, em troca de uma capacidade concreta (revogar sessão) que não existe de outro jeito. O modelo clássico de sessão consulta o banco em <strong>toda</strong> requisição; aqui, numa a cada 15 minutos.</p>
+
+  <h2 id="por-que-opaco">4. Por que o refresh não é um JWT</h2>
+  <p>Seria tentador emitir o refresh token também com <code>jwt.sign</code>, só que com <code>expiresIn: '7d'</code>. Não vamos, por um motivo direto: <strong>a única vantagem do JWT é não precisar consultar o banco</strong> — e o refresh token vai ser consultado no banco de qualquer jeito, pra saber se foi revogado. Um JWT que exige ida ao banco é um JWT que perdeu o motivo de existir, e ainda carrega o peso extra (string comprida, payload legível em Base64, risco de alguém achar que pode confiar nele sem checar).</p>
+  <p>Então o refresh token vai ser <strong>opaco</strong>: 32 bytes aleatórios em hexadecimal, uma string de 64 caracteres sem nenhum significado interno. Quem olha não extrai nada dela; o servidor não "lê" o token, ele <em>procura</em> o token.</p>
+  <div class="rule">
+    <span class="tag">De onde vem a aleatoriedade</span>
+    <p>Do módulo <code>crypto</code> do próprio Node — <code>crypto.randomBytes(32)</code>, o mesmo comando que a parte 7 usou pra gerar o <code>JWT_SECRET</code>. É um gerador criptograficamente seguro, diferente de <code>Math.random()</code> (previsível, jamais use pra nada de segurança). 32 bytes = 256 bits de entropia: adivinhar um token válido por tentativa é inviável.</p>
+  </div>
+
+  <h2 id="rotacao">5. Rotação e detecção de reuso</h2>
+  <p>Um refresh token de 7 dias que pode ser usado várias vezes é um alvo gordo. A prática padrão é <strong>rotação</strong>: cada vez que o refresh é usado, ele é revogado e um novo é emitido junto com o access token. Cada refresh token vale <strong>um uso</strong>.</p>
+  <p>Isso traz de brinde um detector de vazamento. Pensa no que acontece se um atacante copiar o refresh token do aluno:</p>
+  <div class="step">
+    <div class="step-number">1</div>
+    <h3>Os dois têm a mesma string</h3>
+    <p>Aluno legítimo e atacante seguram o mesmo refresh token <code>R1</code>.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">2</div>
+    <h3>Um dos dois usa primeiro</h3>
+    <p>Digamos o atacante. <code>R1</code> é revogado, ele recebe <code>R2</code>. Até aqui, nada parece errado pro servidor.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">3</div>
+    <h3>O outro tenta usar</h3>
+    <p>O aluno legítimo manda <code>R1</code> — um token que <strong>existe no banco mas já está revogado</strong>. Isso nunca acontece num fluxo normal: cliente honesto joga fora o token usado.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">4</div>
+    <h3>Servidor reage</h3>
+    <p>Token revogado sendo reapresentado = a string está em duas mãos. O servidor revoga <strong>todos</strong> os refresh tokens daquele aluno, incluindo o <code>R2</code> que o atacante acabou de ganhar. Os dois são obrigados a logar de novo — e só o legítimo sabe a senha.</p>
+  </div>
+  <p>Repare que o servidor não sabe <em>qual</em> dos dois é o impostor, e nem precisa saber. Derrubar a sessão dos dois já resolve, porque a senha é o desempate.</p>
+  <div class="warn">
+    <p>Esse mecanismo depende de conseguir distinguir três situações diferentes: token <strong>inexistente</strong> (lixo, ou de outro sistema), token <strong>expirado</strong> (passou dos 7 dias, normal) e token <strong>revogado</strong> (suspeito). Guarda isso — é o motivo de a busca no banco, na seção 9, trazer a linha inteira em vez de já filtrar <code>WHERE revogado_em IS NULL</code>.</p>
+  </div>
+
+  <h2 id="fluxo">6. O fluxo completo, passo a passo</h2>
+  <div class="step">
+    <div class="step-number">1</div>
+    <h3>Login</h3>
+    <p><code>POST /auth/login</code> com email e senha, igual à parte 7. A resposta agora traz <strong>dois</strong> tokens: <code>access_token</code> (15 min) e <code>refresh_token</code> (7 dias).</p>
+  </div>
+  <div class="step">
+    <div class="step-number">2</div>
+    <h3>Uso normal</h3>
+    <p>Cliente manda o access token no header <code>Authorization: Bearer &lt;token&gt;</code>, exatamente como na parte 7. Nada muda nas rotas protegidas — o middleware <code>autenticar</code> continua igual.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">3</div>
+    <h3>Access token expira</h3>
+    <p>Depois de 15 minutos, a rota protegida responde <code>401</code> com <code>"Token inválido ou expirado"</code>. É o sinal pro cliente ir renovar — não é erro do usuário.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">4</div>
+    <h3>Renovação</h3>
+    <p><code>POST /auth/refresh</code> com o refresh token no body. Servidor confere no banco, revoga o token usado e devolve um par novo (access + refresh). Sem senha, sem tela de login.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">5</div>
+    <h3>Logout</h3>
+    <p><code>POST /auth/logout</code> com o refresh token. Servidor marca como revogado. O aluno não consegue mais renovar — e em no máximo 15 minutos o access token dele também morre.</p>
+  </div>
+
+  <h2 id="schema">7. Schema: tabela refresh_tokens</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> tabela nova no banco. Rode no <code>psql</code> (<code>docker compose exec -T db psql -U postgres -d estudo</code>) ou no DBeaver, igual você fez com a coluna <code>senha_hash</code> na parte 7.</p>
+  </div>
+  <pre><code>CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id SERIAL PRIMARY KEY,
+  aluno_id INTEGER NOT NULL REFERENCES alunos(id) ON DELETE CASCADE,
+  token_hash CHAR(64) NOT NULL UNIQUE,
+  expira_em TIMESTAMP NOT NULL,
+  revogado_em TIMESTAMP,
+  criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS refresh_tokens_aluno_id_idx
+  ON refresh_tokens (aluno_id);</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">db/schema.sql</span> — cole o mesmo <code>CREATE TABLE</code> acima no <strong>fim do arquivo</strong>, depois do índice de <code>matriculas</code>. O arquivo é a documentação do schema completo (parte 3); se ele não acompanhar as alterações, quem clonar o projeto do zero monta um banco diferente do seu.</p>
+  </div>
+  <p>Coluna por coluna, o que cada uma resolve:</p>
+  <table>
+    <thead><tr><th>Coluna</th><th>Por que existe</th></tr></thead>
+    <tbody>
+      <tr><td><code>aluno_id</code></td><td>De quem é a sessão. O <code>ON DELETE CASCADE</code> faz os tokens sumirem junto com o aluno — token órfão apontando pra aluno inexistente não faria sentido nenhum.</td></tr>
+      <tr><td><code>token_hash</code></td><td>O hash SHA-256 do token, em hexadecimal — sempre 64 caracteres, por isso <code>CHAR(64)</code>. Nunca o token em si (seção 8). O <code>UNIQUE</code> garante a busca por igualdade e serve de índice.</td></tr>
+      <tr><td><code>expira_em</code></td><td>Quando o token deixa de valer. Gravado como data absoluta, calculada no momento da criação — mais simples de consultar do que guardar "duração" e somar depois.</td></tr>
+      <tr><td><code>revogado_em</code></td><td><code>NULL</code> = ativo. Preenchido = revogado (por uso, por logout ou por suspeita de vazamento). Guardar <em>quando</em> em vez de um booleano <code>revogado</code> não custa nada e ajuda a investigar depois.</td></tr>
+    </tbody>
+  </table>
+  <div class="rule">
+    <span class="tag">Por que a linha não é simplesmente apagada</span>
+    <p>Rotação poderia dar <code>DELETE</code> no token usado. Só que aí a detecção de reuso da seção 5 morre: um token deletado é indistinguível de um token que nunca existiu, e a reapresentação de <code>R1</code> viraria só mais um <code>401</code> silencioso, sem alarme. Marcar em vez de apagar é o mesmo raciocínio do <em>soft-delete</em> que a parte 6 deixou anotado pra instrutor.</p>
+  </div>
+
+  <h2 id="token-service">8. Gerar e guardar: services/tokenService.js</h2>
+  <p>Guardar o refresh token em texto puro no banco seria repetir, com outro nome, o erro de guardar senha em texto puro (parte 7, seção 5): quem vazar a tabela sai logado como qualquer aluno. Então guardamos o <strong>hash</strong>, e o token puro só existe em dois lugares — na resposta HTTP e na mão do cliente.</p>
+  <p>Mas aqui usamos <strong>SHA-256</strong>, não bcrypt. Isso parece contradizer a parte 7, e não contradiz — os dois casos são diferentes:</p>
+  <table>
+    <thead><tr><th></th><th>Senha (parte 7 → bcrypt)</th><th>Refresh token (aqui → SHA-256)</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Entropia</strong></td><td>Baixa. Gente escolhe <code>senha123</code>, aniversário, nome do cachorro. Dá pra chutar.</td><td>256 bits vindos de <code>randomBytes</code>. Não dá pra chutar, nem com força bruta.</td></tr>
+      <tr><td><strong>Por que lento ajuda</strong></td><td>Lentidão é a defesa contra quem testa milhões de senhas prováveis por segundo.</td><td>Não há lista de "tokens prováveis" pra testar. Lentidão só custa CPU sem comprar nada.</td></tr>
+      <tr><td><strong>Como é verificado</strong></td><td>Você já sabe qual aluno é (buscou por email) e compara um hash só.</td><td>Você <strong>não</strong> sabe de quem é o token — precisa achá-lo no banco.</td></tr>
+    </tbody>
+  </table>
+  <div class="warn">
+    <p>Essa última linha é a que decide: bcrypt gera um <strong>salt aleatório por hash</strong> (parte 7, seção 5), então o mesmo token hasheado duas vezes dá resultados diferentes. Ótimo pra senha, inviável aqui — não existiria <code>WHERE token_hash = $1</code>, você teria que ler a tabela inteira e rodar <code>bcrypt.compare</code> linha por linha. SHA-256 é determinístico: mesmo token, mesmo hash, busca direta pelo índice.</p>
+  </div>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">services/tokenService.js</span> — arquivo novo, ao lado do <code>senhaService.js</code> da parte 7. Duas funções, nenhuma delas sabe o que é um "aluno":</p>
+  </div>
+  <pre><code>const crypto = require('node:crypto');
+
+const DIAS_DE_VALIDADE = 7;
+
+function gerarRefreshToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function hashRefreshToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function calcularExpiracao() {
+  const agora = new Date();
+  agora.setDate(agora.getDate() + DIAS_DE_VALIDADE);
+  return agora;
+}
+
+module.exports = { gerarRefreshToken, hashRefreshToken, calcularExpiracao };</code></pre>
+  <p><code>node:crypto</code> é módulo nativo — não tem <code>npm install</code> nesta parte, nenhuma dependência nova entra no projeto. O prefixo <code>node:</code> deixa explícito que é built-in do Node, não um pacote do <code>node_modules</code> com esse nome (convenção recente, mas já é o estilo recomendado).</p>
+  <p><code>hashRefreshToken</code> é síncrona de propósito: SHA-256 de 64 caracteres é instantâneo, não faz sentido o <code>async</code>/<code>await</code> que o <code>senhaService</code> precisa ter. Se você escrever <code>await hashRefreshToken(...)</code> por hábito, funciona igual (<code>await</code> em valor não-Promise é inofensivo) — mas é ruído.</p>
+
+  <h2 id="repository">9. Repository: refreshTokensRepository.js</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">repositories/refreshTokensRepository.js</span> — arquivo novo, seguindo o mesmo padrão dos outros repositories (só SQL, nenhuma regra de negócio):</p>
+  </div>
+  <pre><code>const pool = require('../db/pool');
+
+async function criar({ aluno_id, token_hash, expira_em }) {
+  const query = /* sql */ `
+    INSERT INTO refresh_tokens (aluno_id, token_hash, expira_em)
+    VALUES ($1, $2, $3)
+    RETURNING *
+  `;
+  const resultado = await pool.query(query, [aluno_id, token_hash, expira_em]);
+  return resultado.rows[0];
+}
+
+async function buscarPorHash(token_hash) {
+  const query = 'SELECT * FROM refresh_tokens WHERE token_hash = $1';
+  const resultado = await pool.query(query, [token_hash]);
+  return resultado.rows[0];
+}
+
+async function revogar(id) {
+  const query = /* sql */ `
+    UPDATE refresh_tokens
+    SET revogado_em = NOW()
+    WHERE id = $1 AND revogado_em IS NULL
+    RETURNING *
+  `;
+  const resultado = await pool.query(query, [id]);
+  return resultado.rows[0];
+}
+
+async function revogarTodosDoAluno(aluno_id) {
+  const query = /* sql */ `
+    UPDATE refresh_tokens
+    SET revogado_em = NOW()
+    WHERE aluno_id = $1 AND revogado_em IS NULL
+  `;
+  await pool.query(query, [aluno_id]);
+}
+
+module.exports = { criar, buscarPorHash, revogar, revogarTodosDoAluno };</code></pre>
+  <div class="rule">
+    <span class="tag">Por que buscarPorHash não filtra revogado nem expirado</span>
+    <p>Seria natural escrever <code>WHERE token_hash = $1 AND revogado_em IS NULL AND expira_em &gt; NOW()</code> e devolver só tokens usáveis. Aí a rota receberia <code>undefined</code> nos três casos — token inexistente, expirado e revogado viram a mesma coisa — e a detecção de reuso da seção 5 fica impossível. O repository traz a linha crua; quem decide o que cada estado significa é a rota (seção 12).</p>
+  </div>
+  <p>O <code>AND revogado_em IS NULL</code> no <code>revogar</code> tem outra função: garante que revogar duas vezes não sobrescreve o timestamp original, e faz a função devolver <code>undefined</code> se o token já estava revogado.</p>
+
+  <h2 id="emitir-tokens">10. Um lugar só pra emitir o par</h2>
+  <p>Duas rotas vão precisar emitir o mesmo par de tokens: o login (seção 11) e o refresh (seção 12). Escrever o mesmo bloco nas duas convida a alterar uma e esquecer a outra — exatamente o tipo de divergência que vira bug de segurança silencioso.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/auth.js</span> — no topo do arquivo, adicione os imports novos junto dos que já existem:</p>
+  </div>
+  <pre><code>const express = require('express');
+const jwt = require('jsonwebtoken');
+
+const { compararSenha } = require('../services/senhaService');
+<span class="ln-add">const {
+  gerarRefreshToken,
+  hashRefreshToken,
+  calcularExpiracao,
+} = require('../services/tokenService');</span>
+const alunosRepository = require('../repositories/alunosRepository');
+<span class="ln-add">const refreshTokensRepository = require('../repositories/refreshTokensRepository');</span>
+
+const router = express.Router();</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-new">Adicionar</span> <span class="file">routes/auth.js</span> — logo depois do <code>const router = express.Router();</code> e <strong>antes</strong> do <code>router.post('/login', ...)</code>, uma função auxiliar:</p>
+  </div>
+  <pre><code>async function emitirTokens(aluno) {
+  const accessToken = jwt.sign({ aluno_id: aluno.id }, process.env.JWT_SECRET, {
+    expiresIn: '15m',
+  });
+
+  const refreshToken = gerarRefreshToken();
+
+  await refreshTokensRepository.criar({
+    aluno_id: aluno.id,
+    token_hash: hashRefreshToken(refreshToken),
+    expira_em: calcularExpiracao(),
+  });
+
+  return { access_token: accessToken, refresh_token: refreshToken };
+}</code></pre>
+  <div class="rule">
+    <span class="tag">Por que uma função no arquivo, e não um authService.js</span>
+    <p>Mesmo raciocínio da parte 7, seção 8: <code>senhaService.js</code> nasceu porque hash de senha é operação genérica, que outra entidade com login usaria igual. Já <code>emitirTokens</code> é específico do fluxo de autenticação de aluno deste projeto, e é usada por duas rotas do <strong>mesmo</strong> arquivo. Criar <code>authService.js</code> agora seria uma camada com um cliente só, adivinhando um futuro que ainda não chegou. Se um dia instrutor ganhar login, aí sim a função sai daqui.</p>
+  </div>
+  <p>Note o <code>expiresIn: '15m'</code> — o access token encurtou aqui dentro, e essa é a <strong>única</strong> linha do projeto que define esse prazo. O login não assina mais token nenhum por conta própria (próxima seção).</p>
+
+  <h2 id="login-atualizado">11. Login passa a devolver os dois tokens</h2>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/auth.js</span> — dentro de <code>router.post('/login', ...)</code>, no <strong>fim do handler</strong>. Apague as linhas do <code>jwt.sign</code> e o <code>res.json({ token })</code>, e troque pelas duas linhas destacadas. Todo o resto da rota (validação de campos, busca por email, <code>compararSenha</code>, os dois <code>401</code>) fica <strong>exatamente igual</strong>:</p>
+  </div>
+  <pre><code><span class="ln-ctx">  // ...validações e checagem de senha continuam iguais</span>
+
+<span class="ln-del">  const token = jwt.sign({ aluno_id: aluno.id }, process.env.JWT_SECRET, {
+    expiresIn: '2h',
+  });</span>
+<span class="ln-del">  res.json({ token });</span>
+<span class="ln-add">  const tokens = await emitirTokens(aluno);</span>
+<span class="ln-add">  res.json(tokens);</span>
+});</code></pre>
+  <p>A resposta do login muda de formato:</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Antes (parte 7)</h4>
+      <pre><code>{ "token": "eyJhbGci..." }</code></pre>
+    </div>
+    <div class="good">
+      <h4>Agora</h4>
+      <pre><code>{
+  "access_token": "eyJhbGci...",
+  "refresh_token": "9f2c...64 chars"
+}</code></pre>
+    </div>
+  </div>
+  <div class="warn">
+    <p><strong>Isso é uma quebra de contrato.</strong> Qualquer cliente que lia <code>resposta.token</code> passa a receber <code>undefined</code>. Num projeto com front-end em produção, mudar o nome de um campo assim exige versionamento ou um período com os dois campos convivendo — é o tipo de decisão que a parte 3 da trilha API REST discute em "URIs são contrato". Aqui, com o único cliente sendo o seu <code>curl</code>, a troca é livre.</p>
+  </div>
+
+  <h2 id="rota-refresh">12. Rota nova: POST /auth/refresh</h2>
+  <p>É a rota que concentra tudo que foi discutido nas seções 5 e 9. Ela recebe um refresh token e responde uma de quatro coisas: par novo, token desconhecido, token expirado, ou alarme de reuso.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Adicionar</span> <span class="file">routes/auth.js</span> — depois do <code>router.post('/login', ...)</code>, antes do <code>module.exports</code>:</p>
+  </div>
+  <pre><code>router.post('/refresh', async (req, res) => {
+  const { refresh_token } = req.body;
+
+  if (!refresh_token) {
+    return res.status(400).json({ erro: 'refresh_token é obrigatório' });
+  }
+
+  const registro = await refreshTokensRepository.buscarPorHash(
+    hashRefreshToken(refresh_token),
+  );
+
+  if (!registro) {
+    return res.status(401).json({ erro: 'Refresh token inválido' });
+  }
+
+  if (registro.revogado_em) {
+    // Token já usado sendo reapresentado: sinal de vazamento (seção 5).
+    await refreshTokensRepository.revogarTodosDoAluno(registro.aluno_id);
+    return res.status(401).json({ erro: 'Refresh token inválido' });
+  }
+
+  if (registro.expira_em &lt; new Date()) {
+    return res.status(401).json({ erro: 'Refresh token expirado' });
+  }
+
+  const aluno = await alunosRepository.buscarPorId(registro.aluno_id);
+  if (!aluno) {
+    return res.status(401).json({ erro: 'Refresh token inválido' });
+  }
+
+  await refreshTokensRepository.revogar(registro.id);
+
+  const tokens = await emitirTokens(aluno);
+  res.json(tokens);
+});</code></pre>
+  <p>A ordem das checagens não é arbitrária — cada uma depende da anterior ter passado:</p>
+  <table>
+    <thead><tr><th>Situação</th><th>Resposta</th><th>Efeito colateral</th></tr></thead>
+    <tbody>
+      <tr><td>Hash não existe no banco</td><td><code>401</code> "Refresh token inválido"</td><td>Nenhum. Pode ser lixo, token de outro ambiente, ou chute.</td></tr>
+      <tr><td>Existe, mas <code>revogado_em</code> preenchido</td><td><code>401</code> "Refresh token inválido"</td><td><strong>Revoga todos</strong> os tokens ativos do aluno.</td></tr>
+      <tr><td>Ativo, mas passou de <code>expira_em</code></td><td><code>401</code> "Refresh token expirado"</td><td>Nenhum. Ficou 7 dias sem usar, precisa logar de novo.</td></tr>
+      <tr><td>Ativo e no prazo</td><td><code>200</code> com o par novo</td><td>Revoga o token usado (rotação).</td></tr>
+    </tbody>
+  </table>
+  <div class="rule">
+    <span class="tag">Por que "inválido" e "expirado" têm mensagens diferentes</span>
+    <p>Parece contradizer a parte 7, seção 11, onde os dois erros de login viraram a mesma mensagem genérica. A diferença é o que cada mensagem entrega pra quem está do outro lado: no login, distinguir "email não existe" de "senha errada" permite <strong>descobrir quem está cadastrado</strong> testando emails. Aqui, "expirado" só é dito a quem já apresentou um token válido que o servidor emitiu — não vaza a existência de ninguém, e ajuda o cliente a mostrar "sua sessão terminou" em vez de "erro". O reuso, por outro lado, responde a mensagem genérica de propósito: se um atacante souber que foi detectado, ele age antes de você.</p>
+  </div>
+  <p>A busca por <code>alunosRepository.buscarPorId</code> parece redundante — o token já diz o <code>aluno_id</code>. Ela existe pro caso do aluno ter sido apagado depois da emissão: sem ela, <code>emitirTokens</code> tentaria inserir um <code>refresh_tokens.aluno_id</code> apontando pra ninguém, e o <code>REFERENCES alunos(id)</code> do banco derrubaria a requisição com <code>500</code> em vez de um <code>401</code> honesto.</p>
+  <div class="warn">
+    <p><strong>Limitação conhecida, registrada de propósito:</strong> entre o <code>buscarPorHash</code> e o <code>revogar</code> existe uma janela em que duas requisições simultâneas com o mesmo refresh token passariam as duas. É a mesma condição de corrida da Regra 1 na parte 6, e a solução também seria a mesma (transação com <code>SELECT ... FOR UPDATE</code>, ou fazer da própria revogação a checagem: <code>UPDATE ... WHERE revogado_em IS NULL RETURNING *</code> e desistir se não voltar linha). Fica anotado, não resolvido aqui.</p>
+  </div>
+
+  <h2 id="rota-logout">13. Rota nova: POST /auth/logout</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Adicionar</span> <span class="file">routes/auth.js</span> — depois da rota de refresh, ainda antes do <code>module.exports</code>:</p>
+  </div>
+  <pre><code>router.post('/logout', async (req, res) => {
+  const { refresh_token } = req.body;
+
+  if (!refresh_token) {
+    return res.status(400).json({ erro: 'refresh_token é obrigatório' });
+  }
+
+  const registro = await refreshTokensRepository.buscarPorHash(
+    hashRefreshToken(refresh_token),
+  );
+
+  if (registro) {
+    await refreshTokensRepository.revogar(registro.id);
+  }
+
+  res.status(204).send();
+});</code></pre>
+  <div class="rule">
+    <span class="tag">Por que 204 mesmo quando o token não existe</span>
+    <p>Logout é <strong>idempotente</strong> (conceito da parte 2 da trilha API REST): o resultado desejado é "essa sessão não vale mais", e isso já é verdade se o token nunca existiu ou já estava revogado. Responder <code>404</code> a um logout obrigaria todo cliente a tratar um erro que não é erro — e ainda contaria pra quem estivesse chutando strings quais delas existem no banco. Chamar duas vezes seguidas dá <code>204</code> nas duas.</p>
+  </div>
+  <div class="warn">
+    <p><strong>O access token sobrevive ao logout</strong> — por até 15 minutos. Não é bug, é a consequência direta do stateless (seção 1): não existe lista de tokens válidos pra remover uma entrada. Quem precisa de corte instantâneo (banco, saúde) tem que consultar uma <em>denylist</em> a cada requisição, o que joga fora boa parte do ganho do JWT. Encurtar o access token é o meio-termo que a indústria adotou, e é por isso que 15 minutos é um número comum.</p>
+  </div>
+  <p>Repare que <code>/auth/logout</code> <strong>não</strong> usa o middleware <code>autenticar</code>. Exigir access token válido pra sair seria impedir logout justamente de quem está com o access expirado — a hora em que sair é mais provável. A prova de posse aqui é o próprio refresh token.</p>
+
+  <h2 id="testando">14. Testando o fluxo com curl</h2>
+  <p>Reinicie o servidor e use o mesmo aluno com senha das partes anteriores.</p>
+  <pre><code># login — agora vêm dois tokens
+curl -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"carla@example.com","senha":"senha123"}'
+# 200, {"access_token":"eyJ...","refresh_token":"9f2c..."}
+
+# access token funciona nas rotas protegidas, igual à parte 7
+curl http://localhost:3000/alunos/SEU_ID/matriculas \
+  -H "Authorization: Bearer ACCESS_AQUI"
+# 200
+
+# renova o par (guarde o refresh_token NOVO que vier)
+curl -X POST http://localhost:3000/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"REFRESH_AQUI"}'
+# 200, access_token e refresh_token novos — os dois diferentes dos anteriores
+
+# reusa o refresh ANTIGO: dispara a detecção da seção 5
+curl -X POST http://localhost:3000/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"REFRESH_ANTIGO"}'
+# 401, "Refresh token inválido"
+
+# e agora o refresh NOVO também morreu (foi revogado junto)
+curl -X POST http://localhost:3000/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"REFRESH_NOVO"}'
+# 401 — prova de que revogarTodosDoAluno rodou
+
+# refresh inexistente
+curl -X POST http://localhost:3000/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"nao_existe"}'
+# 401, "Refresh token inválido"
+
+# logout (logue de novo antes, pra ter um refresh válido)
+curl -X POST http://localhost:3000/auth/logout \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"REFRESH_AQUI"}'
+# 204, sem corpo
+
+# logout de novo, mesmo token: continua 204 (idempotente)
+curl -X POST http://localhost:3000/auth/logout \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"REFRESH_AQUI"}'
+# 204</code></pre>
+  <p>Pra conferir o efeito no banco depois de brincar um pouco:</p>
+  <pre><code>docker compose exec -T db psql -U postgres -d estudo \
+  -c "SELECT id, aluno_id, LEFT(token_hash, 12) AS hash, revogado_em, expira_em FROM refresh_tokens ORDER BY id;"</code></pre>
+  <p>Você deve ver uma linha por token emitido, com <code>revogado_em</code> preenchido em todos os que já foram usados ou revogados em cascata, e a coluna <code>hash</code> mostrando que <strong>o token puro não está lá</strong>.</p>
+  <div class="callout">
+    <p><strong>Pra ver o access token expirar sem esperar 15 minutos:</strong> troque temporariamente o <code>expiresIn: '15m'</code> do <code>emitirTokens</code> por <code>'10s'</code>, faça login, espere passar, e chame uma rota protegida — deve dar <code>401</code> "Token inválido ou expirado". Aí use o refresh pra pegar um access novo e repita a chamada: <code>200</code>. Esse é o ciclo inteiro que o front-end automatiza. Depois devolve pra <code>'15m'</code>.</p>
+  </div>
+
+  <h2 id="erros-comuns">15. Erros comuns</h2>
+  <ol>
+    <li><strong>Guardar o refresh token em texto puro no banco</strong> — vazou a tabela, vazaram todas as sessões ativas. É o mesmo erro da senha em texto puro, com outro nome.</li>
+    <li><strong>Usar bcrypt no refresh token</strong> — o salt por hash impede o <code>WHERE token_hash = $1</code>, e você acaba varrendo a tabela inteira a cada renovação (seção 8).</li>
+    <li><strong>Filtrar <code>revogado_em IS NULL</code> direto no <code>SELECT</code></strong> — some com a diferença entre "não existe" e "já foi usado", e a detecção de reuso deixa de existir sem nenhum erro aparecer.</li>
+    <li><strong>Não rotacionar</strong> — devolver o mesmo refresh token na renovação transforma um vazamento único em acesso permanente por 7 dias, sem alarme nenhum.</li>
+    <li><strong>Mandar o access token no <code>/auth/refresh</code></strong> — são tokens diferentes, com formatos diferentes. O hash de um JWT nunca vai bater com nenhum <code>token_hash</code> da tabela: <code>401</code>.</li>
+    <li><strong>Esperar que o logout mate o access token na hora</strong> — não mata, e nenhum ajuste de código muda isso sem abandonar o stateless (seção 13).</li>
+    <li><strong>Comparar <code>expira_em</code> com string</strong> — o driver <code>pg</code> devolve <code>TIMESTAMP</code> como objeto <code>Date</code> do JavaScript. Comparar com <code>new Date()</code> funciona; comparar com <code>Date.now()</code> (número) dá resultado sem sentido, sem lançar erro.</li>
+    <li><strong>Esquecer de atualizar o <code>db/schema.sql</code></strong> — o banco da sua máquina fica certo e o arquivo versionado fica mentindo. Quem clonar o projeto monta um schema sem <code>refresh_tokens</code> e só descobre no primeiro login.</li>
+  </ol>
+
+  <h2 id="proximos-passos">16. O que vem a seguir</h2>
+  <p>O ciclo de autenticação está fechado: login, uso, renovação sem senha, logout de verdade e reação a vazamento. Itens que ficam registrados como possíveis próximos passos, sem compromisso de ordem:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Cookie <code>httpOnly</code> pro refresh token</strong>: devolver o refresh no body deixa ele ao alcance de qualquer JavaScript da página — um XSS rouba a sessão inteira. Guardar em cookie <code>httpOnly; Secure; SameSite</code> tira o token do alcance do script, mas traz CSRF pra mesa e exige HTTPS (ver deploy, abaixo).</li>
+      <li><strong>Limpeza dos tokens velhos</strong>: a tabela só cresce — cada login e cada renovação deixam uma linha revogada pra sempre. Um <code>DELETE</code> periódico dos expirados há mais de X dias resolve.</li>
+      <li><strong>Testes automatizados</strong>: continua pendente da parte 7, e ficou mais urgente — o fluxo de refresh tem quatro caminhos distintos e testar todos na mão a cada mudança cansa rápido.</li>
+      <li><strong>Deploy em produção</strong>: variáveis de ambiente de produção, banco gerenciado e HTTPS. Sem HTTPS, todo o cuidado desta parte vai por água abaixo: o token trafega em texto puro na rede.</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Quando testar, presta atenção especial no passo do reuso — logue, renove, e tente usar o refresh antigo de novo. Ver os dois tokens morrerem de uma vez é o momento em que a seção 5 sai do papel. Volta com dúvidas, principalmente se algum <code>401</code> aparecer onde você esperava <code>200</code>, ou se ficar em dúvida sobre por que o access token continua vivo depois do logout.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

@@ -214,6 +214,63 @@ pre code {
   line-height: 1.6;
 }
 
+/* Instrução de edição — diz qual arquivo, onde dentro dele e o que fazer,
+   logo acima do bloco de código correspondente (ver CLAUDE.md). Cola visualmente
+   no <pre> seguinte, então o bloco nunca fica "solto" sem localização. */
+.edit-step {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 0.85rem 1.25rem;
+  margin: 1.75rem 0;
+  max-width: 78ch;
+}
+/* Quando vem um bloco de código logo abaixo, os dois viram uma peça só. */
+.edit-step:has(+ pre) {
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  margin-bottom: 0;
+}
+.edit-step p { margin: 0; }
+.edit-step p + p { margin-top: 0.5rem; }
+.edit-step + pre {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-left: 3px solid var(--accent);
+}
+.edit-step .action {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1em 0.6em;
+  border-radius: 999px;
+  margin-right: 0.5rem;
+}
+.edit-step .action-new { background: var(--ok-soft); color: var(--ok); }
+.edit-step .action-edit { background: var(--accent-soft); color: var(--accent); }
+.edit-step .action-del { background: var(--err-soft); color: var(--err); }
+.edit-step .file {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  font-weight: 600;
+}
+
+/* Marcação de linha dentro de <pre>: o que entra, o que sai, o que só é contexto.
+   Sem prefixo "+"/"-" no texto de propósito — o bloco continua copiável. */
+pre .ln-add,
+pre .ln-del {
+  display: block;
+  padding-left: 0.5rem;
+  border-left: 3px solid transparent;
+}
+pre .ln-add { background: var(--ok-soft); border-left-color: var(--ok); }
+pre .ln-del { background: var(--err-soft); border-left-color: var(--err); }
+pre .ln-ctx { color: var(--text-muted); }
+
 blockquote {
   margin: 1.5rem 0;
   padding: 0.9rem 1.25rem;
