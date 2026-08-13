@@ -33,6 +33,7 @@
     <li><a href="#erros-comuns">15. Erros comuns</a></li>
     <li><a href="#proximos-passos">16. O que vem a seguir</a></li>
   </ol>
+  <a class="toc-next" href="09-seguranca-de-borda.html">9. Segurança de borda &rarr;</a>
 </nav>
 
 <main>
@@ -504,15 +505,19 @@ curl -X POST http://localhost:3000/auth/logout \
   </ol>
 
   <h2 id="proximos-passos">16. O que vem a seguir</h2>
-  <p>O ciclo de autenticação está fechado: login, uso, renovação sem senha, logout de verdade e reação a vazamento. Itens que ficam registrados como possíveis próximos passos, sem compromisso de ordem:</p>
+  <p>O ciclo de autenticação está fechado: login, uso, renovação sem senha, logout de verdade e reação a vazamento. Com isso, o que estava previsto na parte 2 para o Studio Fit acabou — as 4 entidades, as 4 regras de negócio e a proteção das rotas de matrícula.</p>
+  <p>O que vem daqui em diante não é mais "funcionalidade que falta", é <strong>o que separa um projeto que roda na sua máquina de um que aguenta ser usado por outras pessoas</strong>. São muitos itens, então ficam agrupados por natureza, e as partes seguintes da trilha atacam uma categoria por vez, nesta ordem:</p>
   <div class="next-steps">
     <ol>
-      <li><strong>Cookie <code>httpOnly</code> pro refresh token</strong>: devolver o refresh no body deixa ele ao alcance de qualquer JavaScript da página — um XSS rouba a sessão inteira. Guardar em cookie <code>httpOnly; Secure; SameSite</code> tira o token do alcance do script, mas traz CSRF pra mesa e exige HTTPS (ver deploy, abaixo).</li>
-      <li><strong>Limpeza dos tokens velhos</strong>: a tabela só cresce — cada login e cada renovação deixam uma linha revogada pra sempre. Um <code>DELETE</code> periódico dos expirados há mais de X dias resolve.</li>
-      <li><strong>Testes automatizados</strong>: continua pendente da parte 7, e ficou mais urgente — o fluxo de refresh tem quatro caminhos distintos e testar todos na mão a cada mudança cansa rápido.</li>
-      <li><strong>Deploy em produção</strong>: variáveis de ambiente de produção, banco gerenciado e HTTPS. Sem HTTPS, todo o cuidado desta parte vai por água abaixo: o token trafega em texto puro na rede.</li>
+      <li><strong>Segurança de borda e autorização</strong> — a próxima parte. Depois de todo cuidado das partes 7 e 8, o <code>POST /auth/login</code> ainda aceita quantas tentativas o atacante quiser: bcrypt segura força bruta <em>offline</em>, não <em>online</em>. Entram rate limit, headers de segurança (<code>helmet</code>), CORS e limite de tamanho de body — e depois papéis (instrutor/admin), que fecham o <code>GET /aulas/:id/matriculas</code> deixado aberto de propósito na parte 7, e o cookie <code>httpOnly</code> pro refresh token (tira ele do alcance de um XSS, mas traz CSRF pra mesa e exige HTTPS).</li>
+      <li><strong>Corretude e robustez</strong> — hoje toda validação é <code>if (!nome || !email)</code>. Mande <code>data_nascimento: "banana"</code> e o erro vira <code>500</code> do Postgres, não <code>400</code>. Validação de schema (Zod ou Joi) num middleware, mais uma classe de erro de domínio pra <code>409</code>/<code>422</code> pararem de virar <code>500</code>. Junto vêm as transações: a condição de corrida da Regra 1 (parte 6) e a da rotação de refresh (seção 12 desta parte) são o mesmo problema, e se resolvem com <code>SELECT ... FOR UPDATE</code> e afins.</li>
+      <li><strong>Banco e dados</strong> — tudo que hoje é feito na mão no <code>psql</code>: migrations versionadas (o <code>ALTER TABLE</code> da parte 7 e o <code>CREATE TABLE</code> desta viram arquivos que rodam sozinhos), limpeza periódica dos refresh tokens expirados (a tabela só cresce), e o soft-delete de instrutor anotado na parte 6.</li>
+      <li><strong>Qualidade</strong> — testes automatizados (Jest + supertest), começando pelos quatro caminhos do <code>/auth/refresh</code> e pelas quatro regras de negócio, e CI rodando lint + testes a cada push.</li>
+      <li><strong>Contrato da API</strong> — paginação, filtro e ordenação (a parte 3 da trilha API REST ensina, a nossa API ainda devolve a tabela inteira em <code>GET /alunos</code>) e documentação OpenAPI com Swagger UI, pra outra pessoa conseguir consumir sem ler o código.</li>
+      <li><strong>Produção</strong> — logging estruturado e health check, Dockerfile do app (hoje só o banco está em container) e o deploy de verdade: env de produção, banco gerenciado e HTTPS. Sem HTTPS, todo o cuidado desta parte vai por água abaixo — o token trafega em texto puro na rede.</li>
     </ol>
   </div>
+  <p>Deploy fica por último de propósito: cada categoria acima muda o que você empacota. Ficam <strong>fora de escopo</strong> desta trilha, por não serem necessidade do Studio Fit: HATEOAS, cache com Redis, WebSocket, fila e microserviços — coisas que entram se você quiser estudar a tecnologia em si, não porque o projeto pediu.</p>
 
   <footer class="closing">
     <p>Quando testar, presta atenção especial no passo do reuso — logue, renove, e tente usar o refresh antigo de novo. Ver os dois tokens morrerem de uma vez é o momento em que a seção 5 sai do papel. Volta com dúvidas, principalmente se algum <code>401</code> aparecer onde você esperava <code>200</code>, ou se ficar em dúvida sobre por que o access token continua vivo depois do logout.</p>

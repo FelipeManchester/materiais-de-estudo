@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Papéis e autorização</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="09-seguranca-de-borda.html">&larr; 9. Segurança de borda</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#auditoria">1. Auditoria: o que ainda está aberto</a></li>
+    <li><a href="#matriz">2. Quem pode o quê: a matriz de permissões</a></li>
+    <li><a href="#onde-mora-o-papel">3. Onde o papel mora</a></li>
+    <li><a href="#schema">4. Schema: instrutores com login, e o arco exclusivo</a></li>
+    <li><a href="#repository-instrutores">5. Repository de instrutores</a></li>
+    <li><a href="#token-com-papel">6. O papel dentro do token</a></li>
+    <li><a href="#autenticar-atualizado">7. autenticar.js: de aluno pra usuário</a></li>
+    <li><a href="#autorizar">8. Middleware autorizar: uma fábrica de middleware</a></li>
+    <li><a href="#login-instrutor">9. Login de instrutor e refresh generalizado</a></li>
+    <li><a href="#aplicando">10. Aplicando nas rotas</a></li>
+    <li><a href="#posse">11. Papel não basta: posse do recurso</a></li>
+    <li><a href="#primeiro-admin">12. O problema do primeiro admin</a></li>
+    <li><a href="#testando">13. Testando com curl</a></li>
+    <li><a href="#erros-comuns">14. Erros comuns</a></li>
+    <li><a href="#proximos-passos">15. O que vem a seguir</a></li>
+  </ol>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 10</div>
+  <h1>Papéis e autorização</h1>
+  <p class="subtitle">A parte 7 protegeu as rotas de matrícula e deixou o resto aberto, de propósito, porque não existia noção de "quem é instrutor". Essa dívida venceu: hoje qualquer pessoa na internet cadastra instrutor, apaga aula e lê o email de todos os alunos. Esta parte cria papéis e fecha a API rota por rota.</p>
+
+  <h2 id="auditoria">1. Auditoria: o que ainda está aberto</h2>
+  <p>Antes de escrever qualquer código, vale olhar de frente o que a API aceita hoje de um desconhecido — sem token nenhum:</p>
+  <table>
+    <thead><tr><th>Rota</th><th>Quem consegue hoje</th><th>Por que é problema</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /alunos</code></td><td>Qualquer um</td><td>Devolve nome, email e data de nascimento de <strong>todos</strong> os alunos. Vazamento de dado pessoal, e uma lista pronta pra quem quiser atacar o login.</td></tr>
+      <tr><td><code>POST /instrutores</code></td><td>Qualquer um</td><td>Cadastro de funcionário da academia, aberto pra internet.</td></tr>
+      <tr><td><code>PATCH</code> / <code>DELETE /instrutores/:id</code></td><td>Qualquer um</td><td>Apagar instrutor é apagar a agenda dele junto (só não apaga porque a <code>FK</code> reclama, parte 5).</td></tr>
+      <tr><td><code>POST</code> / <code>PATCH</code> / <code>DELETE /aulas</code></td><td>Qualquer um</td><td>A grade inteira do estúdio é editável por estranhos.</td></tr>
+      <tr><td><code>GET /aulas/:id/matriculas</code></td><td>Qualquer um</td><td>Lista de chamada: nome e email de quem está matriculado. Deixado aberto explicitamente na parte 7, "porque não existe papel de instrutor ainda".</td></tr>
+      <tr><td><code>POST /alunos</code></td><td>Qualquer um</td><td>Esse é o único que <strong>deve</strong> continuar aberto — é o cadastro público, a porta de entrada do aluno.</td></tr>
+    </tbody>
+  </table>
+  <div class="warn">
+    <p>Repare no padrão: as partes 7 e 8 blindaram <strong>o que é do aluno</strong> (matrícula própria, sessão própria) e não tocaram no que é <strong>da academia</strong>. Não foi descuido — foi escopo, registrado em cada parte. Mas uma API com metade das rotas protegidas passa uma falsa sensação de segurança, que é pior do que nenhuma: dá pra achar que "tem autenticação" e esquecer que a grade está aberta.</p>
+  </div>
+
+  <h2 id="matriz">2. Quem pode o quê: a matriz de permissões</h2>
+  <p>Autorização começa antes do código, numa decisão de produto: <em>quais tipos de pessoa existem, e o que cada uma faz</em>. No Studio Fit, três:</p>
+  <table>
+    <thead><tr><th>Papel</th><th>Quem é</th><th>Como entra no sistema</th></tr></thead>
+    <tbody>
+      <tr><td><code>aluno</code></td><td>Quem se matricula nas aulas.</td><td>Cadastro público (<code>POST /alunos</code>) + login.</td></tr>
+      <tr><td><code>instrutor</code></td><td>Quem dá as aulas.</td><td>Cadastrado por um admin. Não se auto-cadastra.</td></tr>
+      <tr><td><code>admin</code></td><td>Quem administra o estúdio.</td><td>Criado direto no banco (seção 12) ou por outro admin.</td></tr>
+    </tbody>
+  </table>
+  <p>E a matriz — rota por rota, quem passa:</p>
+  <table>
+    <thead><tr><th>Rota</th><th>Público</th><th>Aluno</th><th>Instrutor</th><th>Admin</th></tr></thead>
+    <tbody>
+      <tr><td><code>POST /alunos</code> (cadastro)</td><td><span class="badge badge-ok">sim</span></td><td>—</td><td>—</td><td>—</td></tr>
+      <tr><td><code>POST /auth/login</code></td><td><span class="badge badge-ok">sim</span></td><td>—</td><td>—</td><td>—</td></tr>
+      <tr><td><code>GET /aulas</code>, <code>GET /aulas/:id</code></td><td><span class="badge badge-ok">sim</span></td><td>sim</td><td>sim</td><td>sim</td></tr>
+      <tr><td><code>GET /instrutores</code></td><td><span class="badge badge-ok">sim</span></td><td>sim</td><td>sim</td><td>sim</td></tr>
+      <tr><td><code>GET /alunos</code> (lista)</td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-ok">sim</span></td></tr>
+      <tr><td><code>POST</code>/<code>PATCH</code>/<code>DELETE /instrutores</code></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-ok">sim</span></td></tr>
+      <tr><td><code>POST</code>/<code>PATCH</code>/<code>DELETE /aulas</code></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-warn">só as próprias</span></td><td><span class="badge badge-ok">sim</span></td></tr>
+      <tr><td><code>POST /aulas/:id/matriculas</code></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-ok">sim</span></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-err">não</span></td></tr>
+      <tr><td><code>GET /aulas/:id/matriculas</code> (chamada)</td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-warn">só das próprias aulas</span></td><td><span class="badge badge-ok">sim</span></td></tr>
+      <tr><td><code>GET /alunos/:id/matriculas</code></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-warn">só as próprias</span></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-err">não</span></td></tr>
+    </tbody>
+  </table>
+  <p>Duas coisas pra reparar nessa tabela, porque elas guiam todo o código desta parte:</p>
+  <ul>
+    <li><strong>Existem três estados, não dois.</strong> "Público" não é o mesmo que "qualquer papel logado": <code>GET /aulas</code> é público de verdade (a grade é vitrine do estúdio), enquanto <code>GET /alunos</code> exige papel específico.</li>
+    <li><strong>Tem "sim", "não" e "depende".</strong> As células amarelas não se resolvem só com papel — dependem de <em>qual</em> recurso está sendo tocado. Isso é a seção 11.</li>
+    <li><strong>Admin não pode matricular.</strong> De propósito: matrícula é de aluno, e admin não é aluno. Papel maior não significa "pode tudo" — significa "pode outras coisas".</li>
+  </ul>
+
+  <h2 id="onde-mora-o-papel">3. Onde o papel mora</h2>
+  <p>Decisão de modelagem, e ela tem consequência pro resto da trilha. Hoje o projeto tem duas tabelas de pessoa — <code>alunos</code> (com <code>email</code> e <code>senha_hash</code> desde a parte 7) e <code>instrutores</code> (sem nada de login). Três caminhos:</p>
+  <table>
+    <thead><tr><th>Opção</th><th>Como funciona</th><th>Custo</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Coluna <code>papel</code> em <code>alunos</code></strong></td><td>Um instrutor seria uma linha em <code>alunos</code> com <code>papel = 'instrutor'</code>.</td><td>Absurdo no domínio: instrutor tem <code>especialidade</code> e dá aula, aluno tem <code>data_nascimento</code> e se matricula. Misturar as duas coisas numa tabela só gera colunas nulas e confusão.</td></tr>
+      <tr><td><strong>Tabela <code>usuarios</code> central</strong></td><td>Uma tabela só com <code>email</code>, <code>senha_hash</code> e <code>papel</code>; <code>alunos</code> e <code>instrutores</code> viram perfis apontando pra ela.</td><td>É o modelo mais limpo, e o que eu escolheria num projeto novo. Aqui exigiria migrar dados existentes e reescrever as partes 7 e 8 inteiras.</td></tr>
+      <tr><td><strong>Login em cada tabela</strong> <span class="badge badge-ok">escolhido</span></td><td><code>instrutores</code> ganha <code>email</code>, <code>senha_hash</code> e <code>papel</code>, como <code>alunos</code> já tem.</td><td>Duplica três colunas e obriga o código de autenticação a saber que existem duas origens. Em troca, nada do que já funciona precisa ser refeito.</td></tr>
+    </tbody>
+  </table>
+  <div class="rule">
+    <span class="tag">Por que registrar a opção que não foi escolhida</span>
+    <p>Porque "duas tabelas com login" é uma escolha que <strong>envelhece mal</strong>: no dia em que aparecer um terceiro tipo de pessoa (recepcionista, personal externo), você duplica as colunas de novo, e o <code>emitirTokens</code> ganha mais um <code>if</code>. Saber disso agora é o que te deixa reconhecer o momento de migrar pra <code>usuarios</code> — em vez de descobrir com quatro tabelas de login e nenhuma ideia de como chegou lá. Decisão consciente com custo anotado é diferente de decisão por acidente.</p>
+  </div>
+  <p>E o <code>papel</code> fica em <code>instrutores</code>, não em <code>alunos</code>: aluno é sempre <code>'aluno'</code> (não existe "aluno admin"), enquanto um instrutor pode ser promovido a admin sem deixar de dar aula.</p>
+
+  <h2 id="schema">4. Schema: instrutores com login, e o arco exclusivo</h2>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> tabela <code>instrutores</code> no banco. Rode no <code>psql</code> ou no DBeaver, igual às partes 7 e 8:</p>
+  </div>
+  <pre><code>ALTER TABLE instrutores ADD COLUMN email VARCHAR(160) UNIQUE;
+ALTER TABLE instrutores ADD COLUMN senha_hash VARCHAR(60);
+ALTER TABLE instrutores ADD COLUMN papel VARCHAR(10) NOT NULL DEFAULT 'instrutor'
+  CHECK (papel IN ('instrutor', 'admin'));</code></pre>
+  <p><code>email</code> e <code>senha_hash</code> ficam opcionais pelo mesmo motivo da parte 7: os instrutores que você já cadastrou não têm esses valores, e um <code>NOT NULL</code> faria o <code>ALTER TABLE</code> falhar. Instrutor sem email simplesmente não loga — continua existindo como "pessoa que dá aula", que é o que ele era até agora.</p>
+  <p>Já o <code>papel</code> pode ser <code>NOT NULL</code>, porque tem <code>DEFAULT</code>: toda linha existente vira <code>'instrutor'</code> na hora do <code>ALTER</code>.</p>
+  <p>Agora a parte menos óbvia. A tabela <code>refresh_tokens</code> da parte 8 tem <code>aluno_id INTEGER NOT NULL REFERENCES alunos(id)</code> — ela não sabe guardar sessão de instrutor.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> tabela <code>refresh_tokens</code> — três comandos, na ordem:</p>
+  </div>
+  <pre><code>ALTER TABLE refresh_tokens ALTER COLUMN aluno_id DROP NOT NULL;
+
+ALTER TABLE refresh_tokens ADD COLUMN instrutor_id INTEGER
+  REFERENCES instrutores(id) ON DELETE CASCADE;
+
+ALTER TABLE refresh_tokens ADD CONSTRAINT refresh_tokens_dono_check
+  CHECK ((aluno_id IS NOT NULL)::int + (instrutor_id IS NOT NULL)::int = 1);</code></pre>
+  <div class="rule">
+    <span class="tag">O que é esse CHECK esquisito</span>
+    <p>Esse padrão chama-se <strong>arco exclusivo</strong>: duas chaves estrangeiras opcionais, das quais <strong>exatamente uma</strong> pode estar preenchida. O truque do <code>CHECK</code> é converter cada teste booleano em <code>0</code> ou <code>1</code> com <code>::int</code> e exigir que a soma dê <code>1</code> — jeito curto de dizer "um dos dois, nunca os dois, nunca nenhum". Sem ele, nada impediria um refresh token órfão (sem dono) ou esquizofrênico (de um aluno <em>e</em> de um instrutor).</p>
+    <p>A alternativa preguiçosa seria trocar as duas colunas por um <code>usuario_id INTEGER</code> solto, sem <code>REFERENCES</code>, e um <code>papel</code> ao lado. Funciona — e joga fora a integridade referencial: nada garantiria que aquele número aponta pra alguém que existe, e apagar um aluno deixaria tokens fantasmas pra trás (o <code>ON DELETE CASCADE</code> das duas <code>FK</code> resolve isso de graça).</p>
+  </div>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">db/schema.sql</span> — reflita as duas alterações no arquivo: adicione as três colunas novas ao <code>CREATE TABLE instrutores</code>, e em <code>refresh_tokens</code> troque a linha do <code>aluno_id</code> pelas três linhas abaixo. Quem clonar o projeto do zero precisa montar o mesmo banco:</p>
+  </div>
+  <pre><code>CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id SERIAL PRIMARY KEY,
+<span class="ln-del">  aluno_id INTEGER NOT NULL REFERENCES alunos(id) ON DELETE CASCADE,</span>
+<span class="ln-add">  aluno_id INTEGER REFERENCES alunos(id) ON DELETE CASCADE,
+  instrutor_id INTEGER REFERENCES instrutores(id) ON DELETE CASCADE,
+  CHECK ((aluno_id IS NOT NULL)::int + (instrutor_id IS NOT NULL)::int = 1),</span>
+<span class="ln-ctx">  token_hash CHAR(64) NOT NULL UNIQUE,
+  expira_em TIMESTAMP NOT NULL,
+  revogado_em TIMESTAMP,
+  criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+);</span></code></pre>
+
+  <h2 id="repository-instrutores">5. Repository de instrutores</h2>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">repositories/instrutoresRepository.js</span> — três mudanças no arquivo. Primeiro, <code>listar</code> passa a escolher colunas em vez de <code>SELECT *</code>, pelo mesmo motivo de <code>alunosRepository.listar</code> na parte 7 (não vazar hash numa rota pública):</p>
+  </div>
+  <pre><code>async function listar() {
+<span class="ln-del">  const query = 'SELECT * FROM instrutores ORDER BY id';</span>
+<span class="ln-add">  const query =
+    'SELECT id, nome, especialidade, papel FROM instrutores ORDER BY id';</span>
+<span class="ln-ctx">  const resultado = await pool.query(query);
+
+  return resultado.rows;</span>
+}</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">repositories/instrutoresRepository.js</span> — a função <code>criar</code> passa a aceitar os campos de login. Os três novos são opcionais: admin pode cadastrar um instrutor que ainda não vai logar.</p>
+  </div>
+  <pre><code><span class="ln-del">async function criar({ nome, especialidade }) {
+  const query =
+    'INSERT INTO instrutores (nome, especialidade) VALUES ($1, $2) RETURNING *';
+  const resultado = await pool.query(query, [nome, especialidade]);</span>
+<span class="ln-add">async function criar({ nome, especialidade, email, senha_hash, papel }) {
+  const query = /* sql */ `
+    INSERT INTO instrutores (nome, especialidade, email, senha_hash, papel)
+    VALUES ($1, $2, $3, $4, COALESCE($5, 'instrutor'))
+    RETURNING id, nome, especialidade, email, papel
+  `;
+  const resultado = await pool.query(query, [
+    nome,
+    especialidade,
+    email ?? null,
+    senha_hash ?? null,
+    papel ?? null,
+  ]);</span>
+<span class="ln-ctx">
+  return resultado.rows[0];
+}</span></code></pre>
+  <p>O <code>RETURNING</code> lista colunas em vez de <code>*</code> — assim o <code>senha_hash</code> nem sai do banco, e a rota não precisa lembrar de removê-lo da resposta (o truque do <code>_senhaHash</code> na parte 7 existiu justamente porque lá o <code>RETURNING *</code> trazia tudo).</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Adicionar</span> <span class="file">repositories/instrutoresRepository.js</span> — a função de busca por email, e inclua ela no <code>module.exports</code> do fim do arquivo:</p>
+  </div>
+  <pre><code><span class="ln-add">async function buscarPorEmail(email) {
+  const query = 'SELECT * FROM instrutores WHERE email = $1';
+  const resultado = await pool.query(query, [email]);
+
+  return resultado.rows[0];
+}</span>
+
+<span class="ln-del">module.exports = { listar, buscarPorId, criar, atualizar, remover };</span>
+<span class="ln-add">module.exports = {
+  listar,
+  buscarPorId,
+  buscarPorEmail,
+  criar,
+  atualizar,
+  remover,
+};</span></code></pre>
+
+  <h2 id="token-com-papel">6. O papel dentro do token</h2>
+  <p>Desde a parte 7, o payload do access token é <code>{ aluno_id: 3 }</code>. Isso embute uma premissa que agora é falsa: <strong>que todo mundo que loga é aluno</strong>. O payload novo carrega quem é <em>e</em> o que é:</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Antes</h4>
+      <pre><code>{ "aluno_id": 3, "iat": ..., "exp": ... }</code></pre>
+    </div>
+    <div class="good">
+      <h4>Agora</h4>
+      <pre><code>{ "usuario_id": 3, "papel": "aluno",
+  "iat": ..., "exp": ... }</code></pre>
+    </div>
+  </div>
+  <p>O papel vai <strong>dentro</strong> do token, e isso merece um momento de atenção: significa que o servidor confia no papel sem consultar o banco a cada requisição — exatamente o ponto do <em>stateless</em> discutido na parte 8. É seguro porque o token é assinado (parte 7, seção 3): ninguém troca <code>"papel": "aluno"</code> por <code>"papel": "admin"</code> sem invalidar a assinatura.</p>
+  <div class="warn">
+    <p>O preço disso é a <strong>janela de propagação</strong>: se você rebaixar um admin agora, o token que ele já tem continua dizendo <code>admin</code> até expirar — até 15 minutos (parte 8). É o mesmo trade-off do logout que não mata o access token, e a mesma resposta: quem precisa de corte instantâneo tem que consultar o banco a cada requisição, jogando fora o ganho do JWT. Vale registrar que existe, não vale resolver aqui.</p>
+  </div>
+  <div class="rule">
+    <span class="tag">Sobre a claim "sub"</span>
+    <p>A RFC 7519 define claims padronizadas pra JWT, e a de identidade chama-se <code>sub</code> (<em>subject</em>). Sistemas maiores usam <code>sub</code> em vez de um nome próprio como <code>usuario_id</code>, porque bibliotecas de terceiros sabem lê-la sozinhas. Não vamos usar aqui por um detalhe chato: a RFC define <code>sub</code> como <em>string</em>, então seria <code>sub: String(usuario.id)</code> na emissão e <code>Number(payload.sub)</code> na leitura — mais uma conversão pra esquecer, do mesmo tipo que já mordeu na parte 7 (<code>"3" !== 3</code>). Com <code>usuario_id</code> o número atravessa inteiro.</p>
+  </div>
+
+  <h2 id="autenticar-atualizado">7. autenticar.js: de aluno pra usuário</h2>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">middlewares/autenticar.js</span> — só o bloco <code>try</code>. O resto do arquivo (checagem do header, split do <code>Bearer</code>, o <code>catch</code>) fica igual:</p>
+  </div>
+  <pre><code>  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+<span class="ln-del">    req.alunoId = payload.aluno_id;</span>
+<span class="ln-add">    req.usuario = { id: payload.usuario_id, papel: payload.papel };</span>
+    next();
+  } catch {
+    return res.status(401).json({ erro: 'Token inválido ou expirado' });
+  }</code></pre>
+  <p>Trocar <code>req.alunoId</code> por <code>req.usuario</code> quebra os três lugares que usavam a propriedade antiga — <code>POST /aulas/:id/matriculas</code>, <code>PATCH /aulas/:id/matriculas/:matriculaId</code> e <code>GET /alunos/:id/matriculas</code>. Os três são consertados na seção 10; se você testar antes disso, vai ver <code>undefined</code> virando erro.</p>
+  <div class="callout">
+    <p>Um objeto <code>req.usuario</code> em vez de campos soltos (<code>req.usuarioId</code>, <code>req.usuarioPapel</code>) não é preciosismo: quando a autorização precisar de um terceiro dado (e vai — nome pra log, id do estúdio numa versão multi-unidade), ele entra dentro do objeto em vez de virar mais uma propriedade avulsa pendurada no <code>req</code>.</p>
+  </div>
+
+  <h2 id="autorizar">8. Middleware autorizar: uma fábrica de middleware</h2>
+  <p>O <code>autenticar</code> responde "quem é você". Falta o "você pode?", e ele precisa ser <strong>configurável por rota</strong>: <code>GET /alunos</code> quer só admin, <code>POST /aulas</code> aceita instrutor ou admin.</p>
+  <p>Middleware do Express tem assinatura fixa <code>(req, res, next)</code> — não dá pra passar argumento extra. A saída é uma função que <strong>devolve</strong> um middleware, já sabendo quais papéis aceitar:</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">middlewares/autorizar.js</span> — arquivo novo, ao lado do <code>autenticar.js</code>:</p>
+  </div>
+  <pre><code>function autorizar(...papeisPermitidos) {
+  return (req, res, next) => {
+    if (!req.usuario) {
+      return res.status(401).json({ erro: 'Token não enviado' });
+    }
+
+    if (!papeisPermitidos.includes(req.usuario.papel)) {
+      return res.status(403).json({
+        erro: 'Você não tem permissão para acessar este recurso',
+      });
+    }
+
+    next();
+  };
+}
+
+module.exports = autorizar;</code></pre>
+  <p>Repare que <code>autorizar('admin')</code> não é o middleware — é a chamada que <em>produz</em> o middleware. Por isso ele aparece com parênteses na rota (<code>autorizar('admin')</code>), enquanto o <code>autenticar</code> aparece sem (<code>autenticar</code>): um é uma fábrica, o outro já é o produto.</p>
+  <table>
+    <thead><tr><th>Na rota</th><th>O que o Express recebe</th></tr></thead>
+    <tbody>
+      <tr><td><code>autenticar</code></td><td>A própria função middleware, escrita na parte 7.</td></tr>
+      <tr><td><code>autorizar('admin')</code></td><td>Uma função nova, criada na hora, que "lembra" que só aceita admin.</td></tr>
+      <tr><td><code>autorizar('instrutor', 'admin')</code></td><td>Outra função, que lembra os dois papéis. <code>...papeisPermitidos</code> junta todos os argumentos num array.</td></tr>
+    </tbody>
+  </table>
+  <p>O que faz a função lembrar dos papéis é uma <strong>closure</strong>: a função devolvida continua enxergando a variável <code>papeisPermitidos</code> de quem a criou, mesmo depois que a chamada terminou. É o mesmo mecanismo, sem nome pomposo, que o <code>express-rate-limit</code> usa quando <code>rateLimit({...})</code> devolve um middleware configurado (parte 9).</p>
+  <div class="rule">
+    <span class="tag">Por que o 401 no começo</span>
+    <p>Se <code>req.usuario</code> não existe, é porque o <code>autenticar</code> não rodou antes desta rota. Responder <code>403</code> aí seria mentira ("você não tem permissão" quando o problema é "você nem se identificou") e esconderia um erro de programação — rota configurada com <code>autorizar</code> sem <code>autenticar</code> na frente. O <code>401</code> deixa o sintoma parecido com o de token ausente, que é exatamente o que aconteceu.</p>
+  </div>
+
+  <h2 id="login-instrutor">9. Login de instrutor e refresh generalizado</h2>
+  <p>Três ajustes em <code>routes/auth.js</code>: <code>emitirTokens</code> passa a saber de papéis, nasce a rota de login de instrutor, e o <code>refresh</code> aprende a renovar sessão dos dois tipos.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/auth.js</span> — no topo, adicione o import do repository de instrutores junto dos que já existem:</p>
+  </div>
+  <pre><code><span class="ln-ctx">const alunosRepository = require('../repositories/alunosRepository');</span>
+<span class="ln-add">const instrutoresRepository = require('../repositories/instrutoresRepository');</span>
+<span class="ln-ctx">const refreshTokensRepository = require('../repositories/refreshTokensRepository');</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/auth.js</span> — a função <code>emitirTokens</code>. Ela deixa de receber <code>aluno</code> e passa a receber um objeto <code>{ id, papel }</code>, gravando o refresh token na coluna certa do arco exclusivo (seção 4):</p>
+  </div>
+  <pre><code><span class="ln-del">async function emitirTokens(aluno) {
+  const accessToken = jwt.sign({ aluno_id: aluno.id }, process.env.JWT_SECRET, {
+    expiresIn: '15m',
+  });</span>
+<span class="ln-add">async function emitirTokens({ id, papel }) {
+  const accessToken = jwt.sign(
+    { usuario_id: id, papel },
+    process.env.JWT_SECRET,
+    { expiresIn: '15m' },
+  );</span>
+
+<span class="ln-ctx">  const refreshToken = gerarRefreshToken();</span>
+
+  await refreshTokensRepository.criar({
+<span class="ln-del">    aluno_id: aluno.id,</span>
+<span class="ln-add">    aluno_id: papel === 'aluno' ? id : null,
+    instrutor_id: papel === 'aluno' ? null : id,</span>
+<span class="ln-ctx">    token_hash: hashRefreshToken(refreshToken),
+    expira_em: calcularExpiracao(),
+  });
+
+  return { access_token: accessToken, refresh_token: refreshToken };
+}</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/auth.js</span> — dentro de <code>router.post('/login', ...)</code>, na última linha antes do <code>res.json</code>. O aluno agora precisa dizer qual é o papel dele:</p>
+  </div>
+  <pre><code><span class="ln-del">  const tokens = await emitirTokens(aluno);</span>
+<span class="ln-add">  const tokens = await emitirTokens({ id: aluno.id, papel: 'aluno' });</span>
+  res.json(tokens);</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-new">Adicionar</span> <span class="file">routes/auth.js</span> — rota nova, logo depois do <code>router.post('/login', ...)</code>. É gêmea da de aluno, trocando o repository e o papel:</p>
+  </div>
+  <pre><code>router.post('/instrutores/login', async (req, res) => {
+  const { email, senha } = req.body;
+
+  if (!email || !senha) {
+    return res.status(400).json({ erro: 'email e senha são obrigatórios' });
+  }
+
+  const instrutor = await instrutoresRepository.buscarPorEmail(email);
+
+  if (!instrutor || !instrutor.senha_hash) {
+    return res.status(401).json({ erro: 'email ou senha inválidos' });
+  }
+
+  const senhaValida = await compararSenha(senha, instrutor.senha_hash);
+
+  if (!senhaValida) {
+    return res.status(401).json({ erro: 'email ou senha inválidos' });
+  }
+
+  const tokens = await emitirTokens({
+    id: instrutor.id,
+    papel: instrutor.papel,
+  });
+
+  res.json(tokens);
+});</code></pre>
+  <p>O <code>!instrutor.senha_hash</code> cobre os instrutores antigos, cadastrados antes desta parte: eles existem, mas não têm senha. Sem essa checagem, o <code>compararSenha</code> receberia <code>null</code> como hash e a resposta viraria um <code>500</code> em vez do <code>401</code> correto.</p>
+  <p>Repare que o papel vem do <strong>banco</strong> (<code>instrutor.papel</code>), nunca do corpo da requisição. Parece óbvio dito assim, mas "aceitar o papel que o cliente mandou" é uma das falhas de autorização mais comuns que existem — seria o equivalente a deixar o <code>aluno_id</code> vir do body, exatamente o buraco que a parte 7 fechou.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/auth.js</span> — dentro de <code>router.post('/refresh', ...)</code>. Substitua o bloco que busca o aluno e emite os tokens (da linha do <code>alunosRepository.buscarPorId</code> até o <code>emitirTokens</code>) por este, que descobre o dono pela coluna preenchida:</p>
+  </div>
+  <pre><code><span class="ln-del">  const aluno = await alunosRepository.buscarPorId(registro.aluno_id);
+  if (!aluno) {
+    return res.status(401).json({ erro: 'Refresh token inválido' });
+  }</span>
+<span class="ln-add">  let dono;
+
+  if (registro.aluno_id) {
+    const aluno = await alunosRepository.buscarPorId(registro.aluno_id);
+    dono = aluno && { id: aluno.id, papel: 'aluno' };
+  } else {
+    const instrutor = await instrutoresRepository.buscarPorId(
+      registro.instrutor_id,
+    );
+    dono = instrutor && { id: instrutor.id, papel: instrutor.papel };
+  }
+
+  if (!dono) {
+    return res.status(401).json({ erro: 'Refresh token inválido' });
+  }</span>
+
+<span class="ln-ctx">  await refreshTokensRepository.revogar(registro.id);</span>
+
+<span class="ln-del">  const tokens = await emitirTokens(aluno);</span>
+<span class="ln-add">  const tokens = await emitirTokens(dono);</span>
+<span class="ln-ctx">  res.json(tokens);</span></code></pre>
+  <div class="callout">
+    <p>Buscar o instrutor de novo no refresh, em vez de confiar no papel que estava no token velho, é o que faz uma promoção ou rebaixamento valer <strong>no máximo em 15 minutos</strong>: na renovação seguinte o papel é relido do banco. Sem isso, um instrutor promovido a admin continuaria com token de instrutor por 7 dias, renovando o papel antigo indefinidamente.</p>
+  </div>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">repositories/refreshTokensRepository.js</span> — a função <code>criar</code> passa a gravar as duas colunas, e a <code>revogarTodosDoAluno</code> vira <code>revogarTodosDoDono</code>. Ajuste também o <code>module.exports</code> do fim do arquivo:</p>
+  </div>
+  <pre><code><span class="ln-del">async function criar({ aluno_id, token_hash, expira_em }) {
+  const query = /* sql */ `
+    INSERT INTO refresh_tokens (aluno_id, token_hash, expira_em)
+    VALUES ($1, $2, $3)
+    RETURNING *
+  `;
+  const resultado = await pool.query(query, [aluno_id, token_hash, expira_em]);</span>
+<span class="ln-add">async function criar({ aluno_id, instrutor_id, token_hash, expira_em }) {
+  const query = /* sql */ `
+    INSERT INTO refresh_tokens (aluno_id, instrutor_id, token_hash, expira_em)
+    VALUES ($1, $2, $3, $4)
+    RETURNING *
+  `;
+  const resultado = await pool.query(query, [
+    aluno_id ?? null,
+    instrutor_id ?? null,
+    token_hash,
+    expira_em,
+  ]);</span>
+<span class="ln-ctx">  return resultado.rows[0];
+}</span></code></pre>
+  <pre><code><span class="ln-del">async function revogarTodosDoAluno(aluno_id) {
+  const query = /* sql */ `
+    UPDATE refresh_tokens
+    SET revogado_em = NOW()
+    WHERE aluno_id = $1 AND revogado_em IS NULL
+  `;
+  await pool.query(query, [aluno_id]);
+}</span>
+<span class="ln-add">async function revogarTodosDoDono({ aluno_id, instrutor_id }) {
+  const query = /* sql */ `
+    UPDATE refresh_tokens
+    SET revogado_em = NOW()
+    WHERE aluno_id IS NOT DISTINCT FROM $1
+      AND instrutor_id IS NOT DISTINCT FROM $2
+      AND revogado_em IS NULL
+  `;
+  await pool.query(query, [aluno_id ?? null, instrutor_id ?? null]);
+}</span></code></pre>
+  <p><code>IS NOT DISTINCT FROM</code> é o "igual que funciona com <code>NULL</code>" do Postgres — <code>aluno_id = NULL</code> nunca é verdadeiro, nem quando a coluna é <code>NULL</code> mesmo. É o primo do <code>IS DISTINCT FROM</code> que a parte 5 usou pra ignorar a própria aula na checagem de conflito.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/auth.js</span> — na rota <code>/refresh</code>, no bloco que detecta reuso (o <code>if (registro.revogado_em)</code>), atualize a chamada pro nome novo:</p>
+  </div>
+  <pre><code>  if (registro.revogado_em) {
+<span class="ln-del">    await refreshTokensRepository.revogarTodosDoAluno(registro.aluno_id);</span>
+<span class="ln-add">    await refreshTokensRepository.revogarTodosDoDono({
+      aluno_id: registro.aluno_id,
+      instrutor_id: registro.instrutor_id,
+    });</span>
+    return res.status(401).json({ erro: 'Refresh token inválido' });
+  }</code></pre>
+
+  <h2 id="aplicando">10. Aplicando nas rotas</h2>
+  <p>Agora a matriz da seção 2 vira código. Comece pelas rotas de aluno, que também precisam do conserto do <code>req.alunoId</code> (seção 7).</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/alunos.js</span> — no topo, adicione o import do <code>autorizar</code>; depois proteja o <code>GET /</code>, que hoje é público:</p>
+  </div>
+  <pre><code><span class="ln-ctx">const autenticar = require('../middlewares/autenticar');</span>
+<span class="ln-add">const autorizar = require('../middlewares/autorizar');</span>
+
+<span class="ln-ctx">const router = express.Router();</span>
+
+<span class="ln-del">router.get('/', async (req, res) => {</span>
+<span class="ln-add">router.get('/', autenticar, autorizar('admin'), async (req, res) => {</span>
+<span class="ln-ctx">  const alunos = await alunosRepository.listar();
+
+  res.json(alunos);
+});</span></code></pre>
+  <p>Os dois middlewares em sequência são a divisão de trabalho da parte 7 virando código: <code>autenticar</code> descobre quem é, <code>autorizar</code> decide se pode. Nunca use o segundo sem o primeiro.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/alunos.js</span> — na rota <code>GET /:id/matriculas</code>, a comparação de dono. Ela usava a propriedade antiga do <code>req</code>:</p>
+  </div>
+  <pre><code>router.get('/:id/matriculas', autenticar, async (req, res) => {
+<span class="ln-del">  if (Number(req.params.id) !== req.alunoId) {</span>
+<span class="ln-add">  if (req.usuario.papel !== 'aluno' || Number(req.params.id) !== req.usuario.id) {</span>
+    return res.status(403).json({
+      erro: 'Você não pode ver as matrículas de outro aluno',
+    });
+  }</code></pre>
+  <p>A checagem de papel entra antes da de identidade por um motivo sutil: sem ela, um instrutor de <code>id = 3</code> conseguiria ler as matrículas do <strong>aluno</strong> de <code>id = 3</code>. Os ids vêm de tabelas diferentes e se repetem — comparar número com número, sem olhar o papel, mistura duas pessoas distintas que por acaso têm o mesmo id.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — no topo, importe o <code>autorizar</code>; depois ajuste as duas rotas de matrícula, que usam a propriedade antiga:</p>
+  </div>
+  <pre><code><span class="ln-ctx">const autenticar = require('../middlewares/autenticar');</span>
+<span class="ln-add">const autorizar = require('../middlewares/autorizar');</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — na rota <code>POST /:id/matriculas</code>: só aluno se matricula (a matriz da seção 2 diz "não" pra instrutor e admin), e o id vem do objeto novo:</p>
+  </div>
+  <pre><code><span class="ln-del">router.post('/:id/matriculas', autenticar, async (req, res, next) => {</span>
+<span class="ln-add">router.post(
+  '/:id/matriculas',
+  autenticar,
+  autorizar('aluno'),
+  async (req, res, next) => {</span>
+<span class="ln-ctx">    // ...busca da aula, checagem de capacidade e try/catch continuam iguais</span>
+
+    const matriculaCriada = await matriculasRepository.criar({
+<span class="ln-del">      aluno_id: req.alunoId,</span>
+<span class="ln-add">      aluno_id: req.usuario.id,</span>
+<span class="ln-ctx">      aula_id: aula.id,
+    });</span></code></pre>
+  <div class="warn">
+    <p>Ao transformar <code>router.post('/:id/matriculas', autenticar, async (req, res, next) =&gt; {...})</code> em chamada de várias linhas, é fácil errar o fechamento. A rota termina agora com <code>});</code> fechando a função e <code>);</code> fechando o <code>router.post</code> — ou, escrito junto, <code>},&#10;);</code>. Se o servidor não subir depois desta seção, é quase certo que o erro está aqui, e o Node aponta a linha.</p>
+  </div>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — na rota <code>PATCH /:id/matriculas/:matriculaId</code>, a checagem de posse:</p>
+  </div>
+  <pre><code>  if (!matricula) {
+    return res.status(404).json({ erro: 'Matrícula não encontrada' });
+  }
+
+<span class="ln-del">  if (matricula.aluno_id !== req.alunoId) {</span>
+<span class="ln-add">  if (req.usuario.papel !== 'aluno' || matricula.aluno_id !== req.usuario.id) {</span>
+    return res.status(403).json({
+      erro: 'Você não pode cancelar a matrícula de outro aluno',
+    });
+  }</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/instrutores.js</span> — no topo, importe os dois middlewares; depois adicione a dupla nas três rotas de escrita (<code>POST /</code>, <code>PATCH /:id</code>, <code>DELETE /:id</code>). As duas rotas de leitura (<code>GET /</code> e <code>GET /:id</code>) ficam públicas, como manda a matriz:</p>
+  </div>
+  <pre><code><span class="ln-add">const autenticar = require('../middlewares/autenticar');
+const autorizar = require('../middlewares/autorizar');</span>
+
+<span class="ln-ctx">const router = express.Router();</span>
+
+<span class="ln-ctx">// ...GET / e GET /:id continuam sem middleware</span>
+
+<span class="ln-del">router.post('/', async (req, res) => {</span>
+<span class="ln-add">router.post('/', autenticar, autorizar('admin'), async (req, res) => {</span>
+
+<span class="ln-del">router.patch('/:id', async (req, res) => {</span>
+<span class="ln-add">router.patch('/:id', autenticar, autorizar('admin'), async (req, res) => {</span>
+
+<span class="ln-del">router.delete('/:id', async (req, res, next) => {</span>
+<span class="ln-add">router.delete('/:id', autenticar, autorizar('admin'), async (req, res, next) => {</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/instrutores.js</span> — ainda na rota <code>POST /</code>, aceite os campos de login. Importe o <code>hashSenha</code> no topo do arquivo (como <code>routes/alunos.js</code> já faz) e troque o corpo do handler:</p>
+  </div>
+  <pre><code><span class="ln-add">const { hashSenha } = require('../services/senhaService');</span>
+
+<span class="ln-ctx">// ...dentro do handler do POST /</span>
+<span class="ln-del">  const { nome, especialidade } = req.body;</span>
+<span class="ln-add">  const { nome, especialidade, email, senha, papel } = req.body;</span>
+
+<span class="ln-ctx">  if (!nome || !especialidade) {
+    return res
+      .status(400)
+      .json({ erro: 'nome e especialidade são orbigatórios' });
+  }</span>
+
+<span class="ln-add">  const senha_hash = senha ? await hashSenha(senha) : null;</span>
+
+  const instrutorCriado = await instrutoresRepository.criar({
+    nome,
+    especialidade,
+<span class="ln-add">    email,
+    senha_hash,
+    papel,</span>
+  });</code></pre>
+  <p>Aceitar <code>papel</code> do body aqui é seguro — e só é seguro porque a rota inteira já exige <code>autorizar('admin')</code>. Quem chega neste código provou ser admin; deixar admin criar outro admin é a intenção. A regra que continua valendo é a da seção 9: papel de <strong>quem faz</strong> a requisição vem do token, nunca do body.</p>
+
+  <h2 id="posse">11. Papel não basta: posse do recurso</h2>
+  <p>Faltam as células amarelas da matriz — as que dependem de <em>qual</em> recurso está sendo tocado. Isso não é papel, é <strong>posse</strong>, e a parte 7 já tinha o padrão: lá, aluno só mexia na matrícula dele.</p>
+  <p>Aqui são duas: instrutor só edita as próprias aulas, e só vê a chamada das próprias aulas. O middleware <code>autorizar</code> não resolve isso sozinho — ele não sabe nada sobre aulas, e nem deve saber. A checagem fica na rota, depois de buscar o recurso.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — na rota <code>GET /:id/matriculas</code> (a lista de chamada). Adicione os middlewares e a checagem de posse logo depois da busca da aula:</p>
+  </div>
+  <pre><code><span class="ln-del">router.get('/:id/matriculas', async (req, res) => {</span>
+<span class="ln-add">router.get(
+  '/:id/matriculas',
+  autenticar,
+  autorizar('instrutor', 'admin'),
+  async (req, res) => {</span>
+<span class="ln-ctx">    const aula = await aulasRepository.buscarPorId(req.params.id);
+
+    if (!aula) {
+      return res.status(404).json({ erro: 'Aula não encontrada' });
+    }</span>
+
+<span class="ln-add">    if (
+      req.usuario.papel === 'instrutor' &&
+      aula.instrutor_id !== req.usuario.id
+    ) {
+      return res.status(403).json({
+        erro: 'Você só pode ver a lista de chamada das suas próprias aulas',
+      });
+    }</span>
+
+<span class="ln-ctx">    const matriculas = await matriculasRepository.listarPorAula(req.params.id);
+    res.json(matriculas);
+  },
+);</span></code></pre>
+  <p>A condição tem duas partes por um motivo: admin passa direto (a checagem só se aplica a <code>papel === 'instrutor'</code>), e instrutor passa apenas na própria aula. Sem o primeiro teste, admin ficaria travado em toda aula que não fosse dele — e admin nem tem aula.</p>
+  <div class="rule">
+    <span class="tag">A ordem 404 antes de 403, de novo</span>
+    <p>Igual à parte 7: confirma que a aula existe (<code>404</code>) antes de checar posse (<code>403</code>). Invertido, um <code>403</code> pra uma aula inexistente confirmaria pro atacante quais ids existem. Vale a pena reparar que essa regra reaparece toda vez que autorização e existência se cruzam — é padrão, não coincidência.</p>
+  </div>
+  <p>Pras rotas de escrita de aula (<code>POST</code>, <code>PATCH</code>, <code>DELETE</code>), a mesma ideia com uma diferença: no <code>POST</code> não existe recurso pra buscar ainda, então a posse é sobre o <code>instrutor_id</code> que veio no body.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — na rota <code>POST /</code>. Adicione os middlewares, e a checagem logo depois da validação de campos obrigatórios que já existe:</p>
+  </div>
+  <pre><code><span class="ln-del">router.post('/', async (req, res) => {</span>
+<span class="ln-add">router.post('/', autenticar, autorizar('instrutor', 'admin'), async (req, res) => {</span>
+<span class="ln-ctx">  // ...desestruturação do body e o if de campos obrigatórios continuam iguais</span>
+
+<span class="ln-add">  if (
+    req.usuario.papel === 'instrutor' &&
+    Number(instrutor_id) !== req.usuario.id
+  ) {
+    return res.status(403).json({
+      erro: 'Você só pode criar aulas para si mesmo',
+    });
+  }</span>
+
+<span class="ln-ctx">  const instrutorExiste = await instrutorRepository.buscarPorId(instrutor_id);</span></code></pre>
+  <p>O <code>Number()</code> aqui é a mesma armadilha da parte 7, com outra roupa: <code>instrutor_id</code> vem do JSON do body e pode chegar como string (<code>"3"</code>) se o cliente mandar assim, enquanto <code>req.usuario.id</code> é sempre número. Sem a conversão, um instrutor legítimo tomaria <code>403</code> dependendo de como o cliente serializou o campo.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — nas rotas <code>PATCH /:id</code> e <code>DELETE /:id</code>. Nas duas, adicione os middlewares na assinatura e a checagem de posse depois da busca da aula. No <code>DELETE</code>, a aula precisa ser buscada antes de remover — hoje a rota chama <code>remover</code> direto:</p>
+  </div>
+  <pre><code><span class="ln-ctx">// PATCH /:id — depois do "if (!aulaExistente)"</span>
+<span class="ln-add">  if (
+    req.usuario.papel === 'instrutor' &&
+    aulaExistente.instrutor_id !== req.usuario.id
+  ) {
+    return res
+      .status(403)
+      .json({ erro: 'Você só pode editar as suas próprias aulas' });
+  }</span>
+
+<span class="ln-ctx">// DELETE /:id — no lugar da chamada direta a aulasRepository.remover</span>
+<span class="ln-add">  const aula = await aulasRepository.buscarPorId(req.params.id);
+
+  if (!aula) {
+    return res.status(404).json({ erro: 'Aula não encontrada' });
+  }
+
+  if (req.usuario.papel === 'instrutor' && aula.instrutor_id !== req.usuario.id) {
+    return res
+      .status(403)
+      .json({ erro: 'Você só pode remover as suas próprias aulas' });
+  }
+
+  await aulasRepository.remover(req.params.id);
+  res.status(204).send();</span></code></pre>
+  <div class="callout">
+    <p>Repare que a checagem "sou instrutor e o recurso é meu?" apareceu <strong>quatro vezes</strong> nesta seção, quase idêntica. Isso é sinal de padrão emergindo — e é exatamente o tipo de repetição que merece virar uma função (<code>ehDonoDaAula(usuario, aula)</code>) ou até um middleware que busca a aula e checa posse de uma vez. Não vamos extrair agora, de propósito: com quatro usos você <em>vê</em> o padrão; extraindo no primeiro, você adivinha. Fica anotado como refatoração natural.</p>
+  </div>
+
+  <h2 id="primeiro-admin">12. O problema do primeiro admin</h2>
+  <p>Agora um problema circular: criar admin exige ser admin (<code>POST /instrutores</code> com <code>autorizar('admin')</code>), e não existe nenhum admin ainda. Nenhuma rota resolve isso — se existisse uma rota pública pra criar admin, ela seria a maior falha de segurança da API.</p>
+  <p>A saída padrão é <strong>seed</strong>: criar o primeiro direto no banco, fora da API. Primeiro gera o hash da senha, usando o mesmo <code>bcryptjs</code> do projeto:</p>
+  <pre><code>node -e "require('bcryptjs').hash('senha_forte_do_admin', 10).then(console.log)"</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span> no <code>psql</code>, colando o hash que o comando acima imprimiu (ele começa com <code>$2b$10$</code>):</p>
+  </div>
+  <pre><code>INSERT INTO instrutores (nome, especialidade, email, senha_hash, papel)
+VALUES ('Admin', 'administração', 'admin@studiofit.com', 'COLE_O_HASH_AQUI', 'admin');</code></pre>
+  <div class="warn">
+    <p>Aspas simples no hash, e cuidado ao colar: hash bcrypt tem <code>$</code>, que em <strong>shell</strong> significa variável. Colando dentro de <code>psql</code> interativo não tem problema; se for rodar via <code>docker compose exec -T db psql -c "..."</code>, use aspas simples externas ou o shell vai comer parte do hash e a senha nunca vai bater.</p>
+  </div>
+  <p>Em projeto de verdade, esse seed vira um script versionado (<code>npm run seed:admin</code>) que lê a senha de variável de ambiente, e roda uma vez por ambiente novo. É assunto da parte de migrations, onde ele encaixa naturalmente.</p>
+
+  <h2 id="testando">13. Testando com curl</h2>
+  <p>Reinicie o servidor. Primeiro, os dois logins:</p>
+  <pre><code># login de admin (o do seed da seção 12)
+curl -X POST http://localhost:3000/auth/instrutores/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@studiofit.com","senha":"senha_forte_do_admin"}'
+# 200 — guarde o access_token como TOKEN_ADMIN
+
+# login de aluno continua na rota de sempre
+curl -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"carla@example.com","senha":"senha123"}'
+# 200 — guarde o access_token como TOKEN_ALUNO</code></pre>
+  <p>Confira que o papel entrou no token (o payload é Base64, parte 7 seção 3):</p>
+  <pre><code>node -e "console.log(JSON.parse(Buffer.from('COLE_O_TOKEN'.split('.')[1],'base64').toString()))"
+# { usuario_id: 1, papel: 'admin', iat: ..., exp: ... }</code></pre>
+  <p>Agora a matriz da seção 2, linha por linha:</p>
+  <pre><code># GET /alunos sem token
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/alunos
+# 401
+
+# GET /alunos com token de ALUNO
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/alunos \
+  -H "Authorization: Bearer TOKEN_ALUNO"
+# 403
+
+# GET /alunos com token de ADMIN
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/alunos \
+  -H "Authorization: Bearer TOKEN_ADMIN"
+# 200
+
+# aluno tentando cadastrar instrutor
+curl -s -w "\n%{http_code}\n" -X POST http://localhost:3000/instrutores \
+  -H "Content-Type: application/json" -H "Authorization: Bearer TOKEN_ALUNO" \
+  -d '{"nome":"Fulano","especialidade":"yoga"}'
+# 403
+
+# admin cadastrando instrutor COM login
+curl -s -w "\n%{http_code}\n" -X POST http://localhost:3000/instrutores \
+  -H "Content-Type: application/json" -H "Authorization: Bearer TOKEN_ADMIN" \
+  -d '{"nome":"Paula","especialidade":"pilates","email":"paula@studiofit.com","senha":"senha123"}'
+# 201, e a resposta NÃO traz senha_hash
+
+# GET /aulas continua público
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/aulas
+# 200</code></pre>
+  <p>Posse do recurso — logue como a instrutora recém-criada (<code>POST /auth/instrutores/login</code> com <code>paula@studiofit.com</code>) e guarde o token como <code>TOKEN_PAULA</code>:</p>
+  <pre><code># Paula criando aula pra si mesma (troque 2 pelo id dela)
+curl -s -w "\n%{http_code}\n" -X POST http://localhost:3000/aulas \
+  -H "Content-Type: application/json" -H "Authorization: Bearer TOKEN_PAULA" \
+  -d '{"nome":"Pilates","instrutor_id":2,"dia_semana":"terca","hora_inicio":"09:00","duracao_minutos":60,"capacidade_maxima":10}'
+# 201
+
+# Paula criando aula em nome de OUTRO instrutor
+curl -s -w "\n%{http_code}\n" -X POST http://localhost:3000/aulas \
+  -H "Content-Type: application/json" -H "Authorization: Bearer TOKEN_PAULA" \
+  -d '{"nome":"Roubada","instrutor_id":1,"dia_semana":"quarta","hora_inicio":"09:00","duracao_minutos":60,"capacidade_maxima":10}'
+# 403, "Você só pode criar aulas para si mesmo"
+
+# lista de chamada de uma aula que NÃO é da Paula
+curl -s -w "\n%{http_code}\n" http://localhost:3000/aulas/1/matriculas \
+  -H "Authorization: Bearer TOKEN_PAULA"
+# 403
+
+# a mesma lista, como admin
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/aulas/1/matriculas \
+  -H "Authorization: Bearer TOKEN_ADMIN"
+# 200
+
+# instrutor tentando se matricular numa aula
+curl -s -w "\n%{http_code}\n" -X POST http://localhost:3000/aulas/1/matriculas \
+  -H "Authorization: Bearer TOKEN_PAULA"
+# 403 — matrícula é coisa de aluno (matriz da seção 2)</code></pre>
+  <p>E o fluxo das partes 7 e 8 tem que continuar intacto — é o teste de regressão desta parte:</p>
+  <pre><code># aluno se matricula
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:3000/aulas/1/matriculas \
+  -H "Authorization: Bearer TOKEN_ALUNO"
+# 201
+
+# aluno vê as próprias matrículas (troque SEU_ID)
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/alunos/SEU_ID/matriculas \
+  -H "Authorization: Bearer TOKEN_ALUNO"
+# 200
+
+# refresh de instrutor funciona igual ao de aluno
+curl -s -w "\n%{http_code}\n" -X POST http://localhost:3000/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"REFRESH_DA_PAULA"}'
+# 200, par novo — e o papel volta relido do banco</code></pre>
+
+  <h2 id="erros-comuns">14. Erros comuns</h2>
+  <ol>
+    <li><strong>Aceitar o papel vindo do body ou de um header</strong> — o papel só pode vir do banco na hora do login, e do token assinado depois disso. Confiar no cliente aqui é dar admin de graça pra quem pedir.</li>
+    <li><strong><code>autorizar</code> sem <code>autenticar</code> antes</strong> — <code>req.usuario</code> não existe, e a rota devolve <code>401</code> mesmo com token válido no header. O middleware trata esse caso (seção 8) justamente porque o erro é comum.</li>
+    <li><strong>Esquecer os parênteses: <code>autorizar</code> em vez de <code>autorizar('admin')</code></strong> — o Express recebe a fábrica no lugar do middleware, e ela nunca chama <code>next()</code>. A requisição fica pendurada até dar timeout, sem erro no log. Sintoma clássico e confuso.</li>
+    <li><strong>Comparar id sem olhar o papel</strong> — <code>aluno 3</code> e <code>instrutor 3</code> são pessoas diferentes com o mesmo número. Toda checagem de posse precisa dos dois (seção 10).</li>
+    <li><strong>Achar que admin pode tudo</strong> — na matriz desta API, admin <em>não</em> se matricula. Papel é um conjunto de permissões, não uma hierarquia onde o de cima herda tudo do de baixo.</li>
+    <li><strong>Deixar <code>SELECT *</code> onde tem <code>senha_hash</code></strong> — <code>instrutoresRepository.listar</code> ficou com colunas explícitas por isso. <code>GET /instrutores</code> é rota pública.</li>
+    <li><strong>Esperar que rebaixar alguém tenha efeito imediato</strong> — o papel está dentro do access token e vale até 15 minutos (seção 6). É o mesmo trade-off do logout na parte 8.</li>
+    <li><strong>Rodar o <code>INSERT</code> do admin sem escapar o <code>$</code></strong> — em shell, o hash bcrypt vira lixo e a senha nunca bate. O sintoma é um <code>401</code> teimoso num usuário que "com certeza existe" (seção 12).</li>
+  </ol>
+
+  <h2 id="proximos-passos">15. O que vem a seguir</h2>
+  <p>Com isto, a categoria <strong>segurança e autorização</strong> está quase fechada: toda rota tem dono definido, papéis vêm do banco e viajam assinados, e posse do recurso é checada onde papel não basta. Sobra um item dela, que é a próxima parte:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Cookie <code>httpOnly</code> pro refresh token</strong> — hoje o refresh volta no corpo do login, ao alcance de qualquer JavaScript da página: um XSS leva a sessão inteira, agora inclusive a de um admin. Em cookie <code>httpOnly; Secure; SameSite</code> ele some do alcance do script, mas traz CSRF pra mesa — e aí o <code>SameSite</code>, o CORS da parte 9 e a rota de refresh passam a trabalhar juntos.</li>
+    </ol>
+  </div>
+  <p>Depois disso, a ordem combinada segue: <strong>corretude e robustez</strong> (validação com Zod ou Joi, erros de domínio, e as transações que resolvem as duas condições de corrida já anotadas) → <strong>banco e dados</strong> (migrations, limpeza de refresh tokens expirados, e o soft-delete de instrutor da parte 6, que ficou mais urgente agora que instrutor tem login: apagar a linha apagaria as credenciais junto) → <strong>qualidade</strong> (Jest + supertest, CI) → <strong>contrato da API</strong> (paginação, OpenAPI) → <strong>produção</strong> (logging, health check, Dockerfile, deploy com HTTPS).</p>
+  <p>Vale notar o que esta parte deixou como dívida consciente, no mesmo espírito das anteriores: a checagem "sou instrutor e o recurso é meu?" está repetida quatro vezes e pede extração (seção 11), e o modelo de duas tabelas com login vai apertar quando aparecer um terceiro tipo de pessoa (seção 3).</p>
+
+  <footer class="closing">
+    <p>Ao testar, o mais revelador não é o <code>403</code> aparecendo onde deve — é o fluxo das partes 7 e 8 continuando idêntico. Se aluno ainda matricula, cancela e renova token normalmente, a autorização entrou sem derrubar nada. Volta com dúvidas, principalmente se algum <code>403</code> pegar quem não devia, ou se alguma rota ficar pendurada sem responder (quase sempre é o parêntese do <code>autorizar</code>, erro 3 da seção 14).</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

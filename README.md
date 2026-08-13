@@ -42,6 +42,8 @@ Trilha específica de stack (complementa a API REST, que é conceitual/independe
 6. [Matrícula e suas regras](node-express/06-matricula-e-regras.html) — a entidade que liga aluno e aula: `JOIN` entre tabelas, Regra 1 (capacidade máxima) no código, Regra 2 (duplicidade) capturando erro do banco, Regra 4 (cancelamento nunca é `DELETE`).
 7. [Autenticação com JWT](node-express/07-autenticacao-jwt.html) — login de aluno com senha em hash (bcrypt), emissão e verificação de token JWT, e proteção das rotas de matrícula pra cada aluno só mexer nas próprias.
 8. [Refresh token](node-express/08-refresh-token.html) — access token curto + refresh token longo guardado em hash no banco, rotação a cada uso com detecção de reuso, e logout de verdade (revogação).
+9. [Segurança de borda](node-express/09-seguranca-de-borda.html) — rate limit contra força bruta no login (`429`), headers de segurança com `helmet`, CORS (o que é e o que não é), limite de tamanho de body e a ordem correta dos middlewares.
+10. [Papéis e autorização](node-express/10-papeis-e-autorizacao.html) — matriz de permissões por papel (aluno/instrutor/admin), login de instrutor, papel dentro do JWT, middleware `autorizar` como fábrica de middleware, e posse do recurso onde papel não basta.
 
 ## Estrutura do repositório
 
@@ -65,7 +67,9 @@ estudo/
     ├── 05-crud-instrutor-aula.html
     ├── 06-matricula-e-regras.html
     ├── 07-autenticacao-jwt.html
-    └── 08-refresh-token.html
+    ├── 08-refresh-token.html
+    ├── 09-seguranca-de-borda.html
+    └── 10-papeis-e-autorizacao.html
 ```
 
 Novas trilhas de estudo entram como novos diretórios na raiz, seguindo o mesmo padrão: arquivos HTML numerados em ordem de leitura.

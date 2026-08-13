@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Segurança de borda</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="08-refresh-token.html">&larr; 8. Refresh token</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-que-e-borda">1. O que é "borda"</a></li>
+    <li><a href="#buraco-do-login">2. O buraco: login sem limite de tentativas</a></li>
+    <li><a href="#dependencias">3. Instalando as dependências</a></li>
+    <li><a href="#rate-limit">4. Rate limit: o limitador global</a></li>
+    <li><a href="#rate-limit-login">5. Rate limit: o limitador estrito do login</a></li>
+    <li><a href="#status-429">6. O status 429 e o header Retry-After</a></li>
+    <li><a href="#helmet">7. helmet: headers que o navegador obedece</a></li>
+    <li><a href="#cors">8. CORS: o que é, e o que não é</a></li>
+    <li><a href="#body-limit">9. Limite de tamanho do body</a></li>
+    <li><a href="#ordem">10. A ordem dos middlewares importa</a></li>
+    <li><a href="#index-final">11. Montando tudo no index.js</a></li>
+    <li><a href="#testando">12. Testando com curl</a></li>
+    <li><a href="#erros-comuns">13. Erros comuns</a></li>
+    <li><a href="#proximos-passos">14. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="10-papeis-e-autorizacao.html">10. Papéis e autorização &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 9</div>
+  <h1>Segurança de borda</h1>
+  <p class="subtitle">As partes 7 e 8 cuidaram de <em>identidade</em>: quem é você, e o que você pode fazer sendo quem é. Nada disso impede alguém de bater um milhão de vezes no login testando senhas, mandar um body de 500 MB pra derrubar o servidor, ou anunciar pro mundo qual versão do Express você roda. Esta parte fecha a porta de entrada — antes de qualquer rota.</p>
+
+  <h2 id="o-que-e-borda">1. O que é "borda"</h2>
+  <p>"Borda" (<em>edge</em>) é tudo que acontece com a requisição <strong>antes</strong> de ela chegar na rota que interessa. No Express, isso é literalmente uma pilha de middlewares registrados com <code>app.use()</code> no <code>index.js</code>, antes dos <code>app.use('/alunos', ...)</code> e companhia.</p>
+  <p>A diferença entre borda e o que fizemos até agora é <strong>o que cada camada sabe</strong>:</p>
+  <table>
+    <thead><tr><th>Camada</th><th>Pergunta que responde</th><th>Onde está no projeto</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Borda</strong></td><td>Essa requisição merece existir? Vem de onde, com que frequência, com que tamanho?</td><td>Esta parte — middlewares globais no <code>index.js</code>.</td></tr>
+      <tr><td><strong>Autenticação</strong></td><td>Quem está pedindo?</td><td><code>middlewares/autenticar.js</code> (parte 7).</td></tr>
+      <tr><td><strong>Autorização</strong></td><td>Esse alguém pode fazer isso?</td><td>Checagens de posse nas rotas de matrícula (parte 7).</td></tr>
+      <tr><td><strong>Regra de negócio</strong></td><td>Isso faz sentido pro domínio?</td><td>Capacidade, conflito de agenda, duplicidade (partes 5 e 6).</td></tr>
+    </tbody>
+  </table>
+  <p>Repare que a borda é a única que age <strong>sem saber quem é o usuário</strong> — e é justamente por isso que ela funciona contra quem ainda nem tem conta. Um atacante testando senhas não passou pela autenticação: ele está tentando passar. A defesa contra ele tem que estar antes.</p>
+  <div class="callout">
+    <p>Nada nesta parte muda o comportamento da API pro uso normal. Se você fizer tudo certo, os testes das partes 4 a 8 continuam respondendo exatamente igual. O que muda é o que acontece nos casos <em>anormais</em> — e o valor disso só aparece no dia em que alguém tenta.</p>
+  </div>
+
+  <h2 id="buraco-do-login">2. O buraco: login sem limite de tentativas</h2>
+  <p>A parte 7 guardou senha com bcrypt e explicou por que ele é deliberadamente lento: torna inviável testar bilhões de senhas por segundo contra um banco vazado. Essa proteção é <strong>offline</strong> — vale pra quem roubou a tabela e está tentando quebrar os hashes na própria máquina.</p>
+  <p>Contra o ataque <strong>online</strong> — alguém batendo no seu <code>POST /auth/login</code> pela rede — bcrypt não faz quase nada. O atacante não precisa quebrar hash nenhum: ele manda email e senha, e a sua API responde de graça se acertou ou não. O único limite é quantas requisições ele consegue disparar.</p>
+  <div class="warn">
+    <p>Faça a conta com a sua API de hoje: mesmo com bcrypt custando ~100 ms por tentativa, um script simples faz algumas dezenas de tentativas por segundo em paralelo. Isso é <strong>na casa do milhão de senhas por dia, por email</strong>, sem nenhum obstáculo. Contra as 10 mil senhas mais comuns da internet, o ataque acaba em minutos — e nenhuma linha de log sua vai gritar, porque cada requisição isolada parece um login normal que errou a senha.</p>
+  </div>
+  <p>A defesa é limitar tentativas por origem: depois de N erros na mesma janela de tempo, o servidor para de responder. Isso não deixa o ataque impossível, deixa <strong>caro demais pra valer a pena</strong> — que é o objetivo realista de quase toda medida de segurança.</p>
+  <div class="rule">
+    <span class="tag">Outro buraco, que fica pra parte 10</span>
+    <p>Enquanto olha o login, repara no <code>GET /alunos</code>: ele é público e devolve nome, email e data de nascimento de <strong>todo mundo</strong> cadastrado. Nem precisa de força bruta pra descobrir quem tem conta — a lista está na mesa. Isso é problema de <em>autorização</em> (quem pode ver o quê), não de borda, e se resolve com papéis na próxima parte. Fica registrado aqui pra não parecer que passou batido.</p>
+  </div>
+
+  <h2 id="dependencias">3. Instalando as dependências</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span> na raiz do projeto — três pacotes, todos middlewares de Express:</p>
+  </div>
+  <pre><code>npm install express-rate-limit helmet cors</code></pre>
+  <table>
+    <thead><tr><th>Pacote</th><th>O que faz</th></tr></thead>
+    <tbody>
+      <tr><td><code>express-rate-limit</code></td><td>Conta requisições por origem numa janela de tempo e responde <code>429</code> quando passa do limite.</td></tr>
+      <tr><td><code>helmet</code></td><td>Define um conjunto de headers HTTP de segurança e remove o <code>X-Powered-By</code>.</td></tr>
+      <tr><td><code>cors</code></td><td>Responde os headers e o <em>preflight</em> que o navegador exige pra deixar uma página de outra origem chamar sua API.</td></tr>
+    </tbody>
+  </table>
+  <p>Nenhuma variável nova de ambiente é obrigatória, mas vamos usar uma pra CORS (seção 8). Adianta já:</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">.env</span> — adicione uma linha no fim, junto do <code>DATABASE_URL</code> e do <code>JWT_SECRET</code> que já existem:</p>
+  </div>
+  <pre><code><span class="ln-add">CORS_ORIGINS=http://localhost:5173,http://localhost:3000</span></code></pre>
+
+  <h2 id="rate-limit">4. Rate limit: o limitador global</h2>
+  <p>Dois limitadores, com propósitos diferentes: um <strong>global</strong>, folgado, que só existe pra evitar abuso grosseiro da API inteira; e um <strong>específico do login</strong>, apertado, que é o que realmente combate a força bruta (seção 5).</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">middlewares/limitadores.js</span> — arquivo novo, ao lado do <code>autenticar.js</code> da parte 7. Os dois limitadores ficam aqui, exportados juntos:</p>
+  </div>
+  <pre><code>const rateLimit = require('express-rate-limit');
+
+const limitadorGlobal = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  limit: 300, // por IP, por janela
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { erro: 'Muitas requisições. Tente novamente em alguns minutos.' },
+});
+
+module.exports = { limitadorGlobal };</code></pre>
+  <p>Opção por opção:</p>
+  <table>
+    <thead><tr><th>Opção</th><th>O que significa</th></tr></thead>
+    <tbody>
+      <tr><td><code>windowMs</code></td><td>Tamanho da janela em milissegundos. A contagem zera a cada janela.</td></tr>
+      <tr><td><code>limit</code></td><td>Quantas requisições um mesmo IP pode fazer dentro da janela. (Em versões antigas do pacote essa opção se chamava <code>max</code>; o nome novo é <code>limit</code>.)</td></tr>
+      <tr><td><code>standardHeaders: 'draft-7'</code></td><td>Manda os headers padronizados, pro cliente saber quanto ainda tem. No <code>draft-7</code> são dois: <code>RateLimit-Policy: 300;w=900</code> (a política) e <code>RateLimit: limit=300, remaining=293, reset=884</code> (a situação atual, num header só).</td></tr>
+      <tr><td><code>legacyHeaders: false</code></td><td>Desliga os antigos <code>X-RateLimit-*</code>. Mandar os dois conjuntos é redundância inútil.</td></tr>
+      <tr><td><code>message</code></td><td>Corpo da resposta <code>429</code>. Um objeto vira JSON — mantém o formato <code>{ erro: ... }</code> que a API usa desde a parte 4.</td></tr>
+    </tbody>
+  </table>
+  <p>300 requisições em 15 minutos é ~20 por minuto: bem acima de qualquer uso humano normal e bem abaixo do volume de um script. Número de partida, não verdade universal — em API real você ajusta olhando o tráfego de verdade.</p>
+  <div class="warn">
+    <p><strong>A contagem é por IP, e mora na memória do processo.</strong> Duas consequências que só aparecem em produção: se você rodar duas instâncias da API atrás de um balanceador, cada uma conta metade (o limite efetivo dobra); e se reiniciar o servidor, a contagem zera. Resolver isso exige um armazenamento compartilhado (Redis) — o pacote aceita via a opção <code>store</code>. Pra uma instância só, o padrão em memória serve.</p>
+  </div>
+
+  <h2 id="rate-limit-login">5. Rate limit: o limitador estrito do login</h2>
+  <p>O limite global não protege o login: 300 tentativas em 15 minutos ainda é muito chute de senha. A rota de autenticação precisa de um limite próprio, uma ordem de grandeza menor.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">middlewares/limitadores.js</span> — adicione o segundo limitador depois do <code>limitadorGlobal</code>, e inclua ele no <code>module.exports</code>:</p>
+  </div>
+  <pre><code><span class="ln-ctx">// ...limitadorGlobal continua igual acima</span>
+
+<span class="ln-add">const limitadorLogin = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: {
+    erro: 'Muitas tentativas de login. Tente novamente em alguns minutos.',
+  },
+});</span>
+
+<span class="ln-del">module.exports = { limitadorGlobal };</span>
+<span class="ln-add">module.exports = { limitadorGlobal, limitadorLogin };</span></code></pre>
+  <p>A opção nova é <code>skipSuccessfulRequests: true</code>, e ela é o detalhe que separa um rate limit útil de um chato:</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Sem a opção</h4>
+      <p>Toda requisição conta. Um escritório inteiro atrás do mesmo IP, gente logando normal o dia todo, estoura o limite de 10 e ninguém entra — sem ataque nenhum acontecendo.</p>
+    </div>
+    <div class="good">
+      <h4>Com a opção</h4>
+      <p>Login que deu certo não conta. Só <strong>falha</strong> consome cota. Quem sabe a senha nunca esbarra no limite; quem está chutando esbarra na décima tentativa.</p>
+    </div>
+  </div>
+  <p>Repare que isso é possível porque o limitador olha o <strong>status da resposta</strong>, não só a chegada da requisição — ele decide se conta depois que a rota respondeu. É o mesmo motivo de o limitador ser um middleware e não uma checagem dentro do handler.</p>
+  <div class="rule">
+    <span class="tag">Por que não bloquear por email em vez de por IP</span>
+    <p>Contar tentativas por email parece mais preciso — e é, contra quem ataca uma conta específica. O problema é que vira uma arma: eu mando 10 senhas erradas pro <em>seu</em> email e você fica trancado fora da própria conta, sem eu ter acesso a nada. Isso tem nome, <em>account lockout DoS</em>. Limitar por IP evita esse efeito colateral. Sistemas grandes fazem os dois, com pesos diferentes e outros sinais (device, histórico) — bem além do escopo aqui.</p>
+  </div>
+
+  <h2 id="status-429">6. O status 429 e o header Retry-After</h2>
+  <p>Status novo pra trilha — a parte 2 da trilha API REST mapeou as famílias, e <code>429 Too Many Requests</code> cai naquela lógica de <code>4xx</code>: o problema está no cliente, e ele pode corrigir. A correção, aqui, é <strong>esperar</strong>.</p>
+  <p>Quando o limite estoura, o <code>express-rate-limit</code> responde <code>429</code> e inclui <code>Retry-After</code>, em segundos, junto do <code>RateLimit</code> zerado:</p>
+  <pre><code>HTTP/1.1 429 Too Many Requests
+RateLimit-Policy: 10;w=900
+RateLimit: limit=10, remaining=0, reset=841
+Retry-After: 841</code></pre>
+  <p>Um cliente bem escrito lê o <code>Retry-After</code> e espera; um cliente mal escrito tenta de novo na hora e continua tomando <code>429</code>.</p>
+  <table>
+    <thead><tr><th>Status</th><th>Quando</th><th>Diferença importante</th></tr></thead>
+    <tbody>
+      <tr><td><code>401</code></td><td>Não sei quem você é (token ausente/inválido).</td><td>Resolve autenticando.</td></tr>
+      <tr><td><code>403</code></td><td>Sei quem você é, e você não pode.</td><td>Não adianta tentar de novo — nunca vai poder.</td></tr>
+      <tr><td><code>429</code></td><td>Sei quem você é ou não, mas você está pedindo demais.</td><td><strong>Adianta tentar de novo</strong>, mais tarde.</td></tr>
+    </tbody>
+  </table>
+  <p>Essa distinção importa na prática: um front-end que trata <code>429</code> como <code>403</code> desloga o usuário sem motivo; tratando certo, ele mostra "aguarde um instante" e reagenda a chamada.</p>
+
+  <h2 id="helmet">7. helmet: headers que o navegador obedece</h2>
+  <p><code>helmet()</code> não muda nada no seu código — ele adiciona headers na resposta que <strong>o navegador</strong> lê e obedece. Os principais:</p>
+  <table>
+    <thead><tr><th>Header</th><th>O que instrui o navegador a fazer</th></tr></thead>
+    <tbody>
+      <tr><td><code>X-Content-Type-Options: nosniff</code></td><td>Não adivinhar o tipo do conteúdo. Sem isso, um arquivo enviado por usuário pode ser interpretado como script.</td></tr>
+      <tr><td><code>X-Frame-Options</code> / <code>frame-ancestors</code></td><td>Não deixar a página ser embutida em <code>&lt;iframe&gt;</code> de outro site — defesa contra <em>clickjacking</em>.</td></tr>
+      <tr><td><code>Strict-Transport-Security</code></td><td>Depois da primeira visita, só falar com este domínio por HTTPS. <strong>Só tem efeito se você já servir HTTPS</strong> (ver produção, parte final).</td></tr>
+      <tr><td><code>Content-Security-Policy</code></td><td>De onde a página pode carregar script, estilo, imagem. É a defesa mais forte contra XSS — e a mais chata de configurar.</td></tr>
+      <tr><td><code>Referrer-Policy</code></td><td>Quanto da URL atual vaza no header <code>Referer</code> ao clicar num link externo.</td></tr>
+    </tbody>
+  </table>
+  <p>E ele remove um header: o <code>X-Powered-By: Express</code>, que o Express manda por padrão. Sozinho isso não impede ataque nenhum — mas anunciar seu stack facilita a vida de quem varre a internet procurando versões com falha conhecida. Custo de remover: zero.</p>
+  <div class="callout">
+    <p><strong>"Mas minha API só devolve JSON, não tem página."</strong> Verdade — CSP e <code>X-Frame-Options</code> não têm o que proteger numa resposta JSON consumida por um app. Ainda vale ligar: o custo é uma linha, e no dia em que a API servir <strong>qualquer</strong> HTML (a documentação Swagger da categoria "contrato", uma página de erro, um redirect), a proteção já está lá. Segurança que depende de alguém lembrar de ligar depois costuma não ser ligada.</p>
+  </div>
+  <div class="warn">
+    <p>Guarde este detalhe pra quando chegar no Swagger UI: o CSP padrão do helmet bloqueia scripts e estilos inline, que é exatamente do que a interface do Swagger precisa. Não é bug — é o CSP funcionando. A solução é afrouxar a política <strong>só na rota da documentação</strong>, nunca desligar o helmet inteiro por causa dela.</p>
+  </div>
+
+  <h2 id="cors">8. CORS: o que é, e o que não é</h2>
+  <p>Essa é a que mais gera confusão, então começa pelo que ela <strong>não</strong> é: CORS não protege a sua API. Repare que você testou tudo com <code>curl</code> desde a parte 4 e nunca esbarrou em CORS nenhum — e não vai esbarrar, porque <code>curl</code> não é navegador e simplesmente ignora o assunto.</p>
+  <p>O mecanismo é do <strong>navegador</strong>, e existe pra proteger o <em>usuário</em>, não o servidor. A regra base chama-se <em>same-origin policy</em>: um JavaScript rodando em <code>https://site-aleatorio.com</code> não pode ler a resposta de uma chamada pra <code>https://sua-api.com</code>. Sem essa regra, qualquer página aberta numa aba faria requisições pra sua API aproveitando os cookies do usuário e leria o resultado.</p>
+  <p>CORS é o jeito de o servidor dizer "esta origem específica pode": um header <code>Access-Control-Allow-Origin</code> na resposta. O navegador lê, e libera ou barra o JavaScript da página.</p>
+  <div class="step">
+    <div class="step-number">1</div>
+    <h3>O navegador desconfia</h3>
+    <p>Página em <code>http://localhost:5173</code> tenta um <code>fetch</code> pra <code>http://localhost:3000</code>. Portas diferentes = origens diferentes.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">2</div>
+    <h3>Preflight</h3>
+    <p>Pra requisições "não simples" (com <code>Authorization</code>, ou <code>Content-Type: application/json</code>, que é o nosso caso), o navegador manda antes um <code>OPTIONS</code> perguntando se aquele método e aqueles headers são permitidos.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">3</div>
+    <h3>O servidor responde a política</h3>
+    <p>O middleware <code>cors</code> responde o <code>OPTIONS</code> com <code>Access-Control-Allow-Origin</code>, <code>-Methods</code> e <code>-Headers</code>. Só então o navegador dispara a requisição de verdade.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">4</div>
+    <h3>Atacante nenhum foi barrado</h3>
+    <p>Quem usa <code>curl</code>, Postman ou um script em Python nunca passou por nada disso. Por isso CORS não substitui autenticação — ela é a defesa real, e continua sendo.</p>
+  </div>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">middlewares/cors.js</span> — arquivo novo. A lista de origens permitidas vem do <code>.env</code>, porque ela é diferente em cada ambiente (localhost no seu micro, domínio real em produção):</p>
+  </div>
+  <pre><code>const cors = require('cors');
+
+const origensPermitidas = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((origem) => origem.trim())
+  .filter(Boolean);
+
+const corsConfigurado = cors({
+  origin: origensPermitidas,
+  methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+});
+
+module.exports = corsConfigurado;</code></pre>
+  <p>Passar um array em <code>origin</code> faz o pacote comparar a origem da requisição com a lista e responder o header só quando bater. É o oposto de <code>origin: '*'</code>, que libera qualquer site — aceitável numa API pública de leitura, ruim numa API com login.</p>
+  <p>O <code>allowedHeaders</code> precisa incluir <code>Authorization</code> por causa das partes 7 e 8: sem isso, o preflight nega o header do token e o front-end nunca consegue chamar rota protegida — um dos erros de CORS mais comuns de depurar, porque a requisição "some" antes de chegar no seu log.</p>
+
+  <h2 id="body-limit">9. Limite de tamanho do body</h2>
+  <p>O <code>express.json()</code> que está no <code>index.js</code> desde a parte 4 aceita, por padrão, até 100 KB de JSON por requisição. Não é gigante, mas é bem mais do que qualquer rota deste projeto precisa — o maior body aqui é um cadastro de aula com seis campos.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.js</span> — na linha do <code>app.use(express.json())</code>, adicione o limite:</p>
+  </div>
+  <pre><code><span class="ln-del">app.use(express.json());</span>
+<span class="ln-add">app.use(express.json({ limit: '10kb' }));</span></code></pre>
+  <p>Body maior que isso faz o parser lançar um erro — que, graças ao Express 5, chega sozinho no error handler do fim do <code>index.js</code>. Só que aquele handler responde <code>500</code> pra tudo, e "você mandou um JSON grande demais" é claramente erro do cliente, não do servidor.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.js</span> — no middleware de erro (aquele com quatro argumentos, no fim do arquivo). Adicione as duas checagens <strong>antes</strong> do <code>console.error</code>, mantendo o resto como está:</p>
+  </div>
+  <pre><code>app.use((err, req, res, _next) => {
+<span class="ln-add">  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ erro: 'Corpo da requisição grande demais' });
+  }</span>
+
+<span class="ln-add">  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ erro: 'JSON inválido' });
+  }</span>
+
+<span class="ln-ctx">  console.error(err);
+  res.status(500).json({ erro: 'Erro interno no servidor' });</span>
+});</code></pre>
+  <p>A segunda checagem conserta um incômodo que existe desde a parte 4 e talvez você já tenha esbarrado: mandar JSON malformado no <code>curl</code> (uma vírgula sobrando, uma aspa faltando) devolvia <code>500</code>, como se o servidor tivesse quebrado. Agora devolve <code>400</code>, que é a verdade.</p>
+  <div class="rule">
+    <span class="tag">De onde vem esse err.type</span>
+    <p>Não é invenção nossa nem do Express: quem lança é o <code>body-parser</code>, usado internamente pelo <code>express.json()</code>. Ele marca os erros que gera com um campo <code>type</code> justamente pra dar pra distinguir um do outro sem comparar mensagem de texto. É o mesmo padrão do <code>err.code === '23505'</code> do Postgres na parte 6 — biblioteca séria dá um código estável pro erro, e você usa o código, nunca a mensagem.</p>
+  </div>
+
+  <h2 id="ordem">10. A ordem dos middlewares importa</h2>
+  <p>Middleware no Express roda na ordem em que foi registrado. Numa pilha de segurança, ordem errada não dá erro — dá proteção que não protege. A ordem que vamos usar, e o porquê de cada posição:</p>
+  <pre><code>requisição
+   │
+   ├─ helmet            ← headers em TODA resposta, inclusive nos erros abaixo
+   ├─ cors              ← precisa responder o preflight OPTIONS antes de qualquer coisa
+   ├─ limitadorGlobal   ← barra o excesso ANTES de gastar CPU com parse e banco
+   ├─ express.json      ← só agora o body vira objeto
+   │
+   ├─ /auth  (+ limitadorLogin na rota de login)
+   ├─ /alunos  /instrutores  /aulas
+   │
+   └─ error handler     ← sempre por último, com 4 argumentos</code></pre>
+  <p>Os dois pontos que mais dão errado:</p>
+  <ul>
+    <li><strong>Rate limit depois do <code>express.json()</code></strong> — funciona, mas você já pagou o custo de ler e parsear o corpo da requisição que ia recusar de qualquer jeito. Num ataque de volume, é exatamente o que o atacante quer.</li>
+    <li><strong>CORS depois das rotas</strong> — o preflight <code>OPTIONS</code> nunca chega no middleware, o navegador recebe <code>404</code>, e o front-end mostra um erro de CORS que não tem nada a ver com a configuração que você escreveu.</li>
+  </ul>
+
+  <h2 id="index-final">11. Montando tudo no index.js</h2>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.js</span> — no bloco de <code>require</code> do topo, adicione os três imports novos depois dos routers que já existem:</p>
+  </div>
+  <pre><code><span class="ln-ctx">const authRouter = require('./routes/auth');</span>
+<span class="ln-add">const helmet = require('helmet');
+const corsConfigurado = require('./middlewares/cors');
+const {
+  limitadorGlobal,
+  limitadorLogin,
+} = require('./middlewares/limitadores');</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.js</span> — logo depois do <code>const app = express();</code>. Adicione as três linhas novas <strong>antes</strong> do <code>express.json</code> (que você já alterou na seção 9):</p>
+  </div>
+  <pre><code>const app = express();
+
+<span class="ln-add">app.use(helmet());
+app.use(corsConfigurado);
+app.use(limitadorGlobal);</span>
+<span class="ln-ctx">app.use(express.json({ limit: '10kb' }));</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.js</span> — na linha que monta o router de auth. O limitador estrito entra como argumento do meio, aplicando-se a tudo que começa com <code>/auth</code>:</p>
+  </div>
+  <pre><code><span class="ln-del">app.use('/auth', authRouter);</span>
+<span class="ln-add">app.use('/auth', limitadorLogin, authRouter);</span></code></pre>
+  <div class="rule">
+    <span class="tag">Por que no /auth inteiro e não só no /login</span>
+    <p><code>/auth</code> tem três rotas hoje: <code>login</code>, <code>refresh</code> e <code>logout</code> (parte 8). As três merecem limite apertado pelo mesmo motivo — <code>refresh</code> também aceita um segredo vindo do cliente, e chutar refresh token é tão ataque quanto chutar senha. Prender o limitador no <code>app.use('/auth', ...)</code> cobre as três de uma vez, e cobre automaticamente qualquer rota de autenticação que você adicionar depois. Se um dia uma delas precisar de limite diferente, aí você move o limitador pra dentro do <code>routes/auth.js</code>, rota a rota.</p>
+  </div>
+  <div class="warn">
+    <p><strong>Se um dia a API rodar atrás de proxy</strong> (Nginx, Heroku, Render, Cloudflare — ou seja, em produção), todas as requisições chegam no Express com o IP <strong>do proxy</strong>, não do cliente. O rate limit passa a contar o mundo inteiro como um usuário só, e o primeiro punhado de requisições legítimas trava todos os outros. A correção é <code>app.set('trust proxy', 1)</code>, que manda o Express confiar no header <code>X-Forwarded-For</code>. Não coloque agora sem precisar: confiar nesse header quando <em>não</em> há proxy na frente permite que qualquer cliente forje o próprio IP e escape do limite. É item da parte de deploy, listado como tal.</p>
+  </div>
+
+  <h2 id="testando">12. Testando com curl</h2>
+  <p>Reinicie o servidor. O primeiro teste é o mais importante: <strong>nada quebrou</strong>.</p>
+  <pre><code># fluxo normal continua igual à parte 8
+curl -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"carla@example.com","senha":"senha123"}'
+# 200, access_token e refresh_token</code></pre>
+  <p>Headers do helmet e do rate limit, com <code>-i</code> pra ver a resposta inteira:</p>
+  <pre><code>curl -i http://localhost:3000/aulas | head -20
+# procure: X-Content-Type-Options, Content-Security-Policy,
+#          Strict-Transport-Security, X-Frame-Options,
+#          RateLimit-Policy e RateLimit
+# e confirme que NÃO aparece mais: X-Powered-By: Express</code></pre>
+  <p>Estourando o limite do login — 12 tentativas erradas seguidas, limite de 10:</p>
+  <pre><code>for i in $(seq 1 12); do
+  printf "%s: " "$i"
+  curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:3000/auth/login \
+    -H "Content-Type: application/json" \
+    -d '{"email":"carla@example.com","senha":"errada"}'
+done
+# 401 nas 10 primeiras, 429 da 11ª em diante</code></pre>
+  <div class="callout">
+    <p>Depois de tomar <code>429</code>, tente logar com a senha <strong>certa</strong>: também dá <code>429</code>. É o comportamento correto — o limite é por origem, não por credencial, senão bastaria acertar pra escapar. Pra continuar testando sem esperar 15 minutos, reinicie o servidor (a contagem mora na memória do processo, seção 4).</p>
+    <p>Se o <code>429</code> aparecer <strong>antes</strong> da 11ª tentativa, não é bug: qualquer requisição a <code>/auth</code> feita nos 15 minutos anteriores já consumiu parte da cota, porque o limitador está preso ao prefixo inteiro (seção 11). Reinicie o servidor antes de contar.</p>
+  </div>
+  <p>Preflight de CORS, simulando o que o navegador manda antes de um <code>POST</code>:</p>
+  <pre><code>curl -i -X OPTIONS http://localhost:3000/alunos \
+  -H "Origin: http://localhost:5173" \
+  -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: content-type,authorization"
+# 204, com Access-Control-Allow-Origin: http://localhost:5173
+
+# agora de uma origem que NÃO está no .env
+curl -i -X OPTIONS http://localhost:3000/alunos \
+  -H "Origin: http://site-aleatorio.com" \
+  -H "Access-Control-Request-Method: POST"
+# resposta SEM o header Access-Control-Allow-Origin — é isso que faz
+# o navegador barrar. O curl não liga e mostraria o corpo normalmente.</code></pre>
+  <p>Body grande demais e JSON malformado:</p>
+  <pre><code># gera um JSON de ~50 KB, acima do limite de 10 KB
+node -e "console.log(JSON.stringify({nome:'x'.repeat(50000)}))" > /tmp/grande.json
+curl -s -w "\n%{http_code}\n" -X POST http://localhost:3000/alunos \
+  -H "Content-Type: application/json" --data-binary @/tmp/grande.json
+# 413, "Corpo da requisição grande demais"
+
+# JSON malformado (vírgula sobrando)
+curl -s -w "\n%{http_code}\n" -X POST http://localhost:3000/alunos \
+  -H "Content-Type: application/json" -d '{"nome":"Ana",}'
+# 400, "JSON inválido" — antes desta parte, era 500</code></pre>
+
+  <h2 id="erros-comuns">13. Erros comuns</h2>
+  <ol>
+    <li><strong>Achar que CORS protege a API</strong> — protege o usuário do navegador. <code>curl</code>, Postman e scripts ignoram completamente. Autenticação é a defesa; CORS é política de navegador.</li>
+    <li><strong>Esquecer <code>Authorization</code> no <code>allowedHeaders</code></strong> — o preflight nega, e o front-end nunca consegue chamar rota protegida. O sintoma é confuso: a requisição não aparece em log nenhum do servidor.</li>
+    <li><strong>Rate limit atrás de proxy sem <code>trust proxy</code></strong> — todo mundo vira o mesmo IP e um usuário derruba o acesso de todos (seção 11). Ligar <code>trust proxy</code> <em>sem</em> ter proxy é o erro oposto, e deixa qualquer um forjar o próprio IP.</li>
+    <li><strong>Contar login bem-sucedido na cota</strong> — sem <code>skipSuccessfulRequests</code>, uso legítimo intenso derruba gente que sabe a senha.</li>
+    <li><strong>Limitar por email em vez de IP</strong> — vira ferramenta pra trancar a conta alheia de fora (seção 5).</li>
+    <li><strong>Desligar o helmet por causa do Swagger</strong> — o CSP bloqueando o inline da documentação é o CSP funcionando. Afrouxe na rota da doc, não globalmente.</li>
+    <li><strong>Esperar HSTS funcionar em HTTP</strong> — o header vai na resposta, o navegador ignora sem HTTPS. Não é helmet quebrado.</li>
+    <li><strong>Registrar o rate limit depois das rotas</strong> — middleware roda na ordem de registro; registrado depois, nunca vê as requisições que deveria barrar.</li>
+  </ol>
+
+  <h2 id="proximos-passos">14. O que vem a seguir</h2>
+  <p>A porta de entrada está fechada: força bruta fica cara, headers de segurança vão em toda resposta, só as origens que você listou passam pelo navegador, e body gigante ou malformado morre com o status certo. Seguindo as categorias definidas no fim da parte 8, ainda dentro de <strong>segurança e autorização</strong> faltam dois itens, um por parte:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Papéis (instrutor/admin)</strong> — a próxima parte. O <code>GET /alunos</code> ainda entrega nome, email e data de nascimento de todo mundo pra qualquer um (seção 2), o <code>GET /aulas/:id/matriculas</code> segue aberto desde a parte 7, e a grade inteira é editável por estranhos. Fechar isso exige login de instrutor, uma noção de papel no token, e um middleware de autorização por papel — a evolução natural do <code>autenticar.js</code>.</li>
+      <li><strong>Cookie <code>httpOnly</code> pro refresh token</strong> — depois dela. Hoje o refresh volta no corpo do login, ao alcance de qualquer JavaScript da página. Em cookie <code>httpOnly; Secure; SameSite</code> ele some do alcance de um XSS, mas traz CSRF pra mesa (e aí <code>SameSite</code> e o CORS desta parte passam a trabalhar juntos) e exige HTTPS pra valer de verdade.</li>
+    </ol>
+  </div>
+  <p>Depois que essa categoria fechar, a ordem combinada segue: <strong>corretude e robustez</strong> (validação com Zod/Joi, erros de domínio, transações pras duas condições de corrida já anotadas) → <strong>banco e dados</strong> (migrations, limpeza de tokens expirados) → <strong>qualidade</strong> (Jest + supertest, CI) → <strong>contrato da API</strong> (paginação, OpenAPI) → <strong>produção</strong> (logging, health check, Dockerfile do app, deploy com HTTPS — e aí sim o <code>trust proxy</code> e o HSTS desta parte passam a fazer efeito).</p>
+
+  <footer class="closing">
+    <p>Ao testar, o resultado mais importante é o mais silencioso: todo o fluxo das partes 7 e 8 respondendo exatamente igual a antes. Depois disso, brinque de estourar o limite do login e de mandar body grande demais — são os dois casos em que a API muda de comportamento. Volta com dúvidas, principalmente se algo que funcionava parou de funcionar, ou se o preflight de CORS não responder o que você esperava.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>
