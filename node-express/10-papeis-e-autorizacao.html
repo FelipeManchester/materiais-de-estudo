@@ -32,6 +32,7 @@
     <li><a href="#erros-comuns">14. Erros comuns</a></li>
     <li><a href="#proximos-passos">15. O que vem a seguir</a></li>
   </ol>
+  <a class="toc-next" href="11-cookie-httponly.html">11. Cookie httpOnly &rarr;</a>
 </nav>
 
 <main>
@@ -601,33 +602,72 @@ const autorizar = require('../middlewares/autorizar');</span>
 <span class="ln-ctx">  const instrutorExiste = await instrutorRepository.buscarPorId(instrutor_id);</span></code></pre>
   <p>O <code>Number()</code> aqui é a mesma armadilha da parte 7, com outra roupa: <code>instrutor_id</code> vem do JSON do body e pode chegar como string (<code>"3"</code>) se o cliente mandar assim, enquanto <code>req.usuario.id</code> é sempre número. Sem a conversão, um instrutor legítimo tomaria <code>403</code> dependendo de como o cliente serializou o campo.</p>
   <div class="edit-step">
-    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — nas rotas <code>PATCH /:id</code> e <code>DELETE /:id</code>. Nas duas, adicione os middlewares na assinatura e a checagem de posse depois da busca da aula. No <code>DELETE</code>, a aula precisa ser buscada antes de remover — hoje a rota chama <code>remover</code> direto:</p>
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — rota <code>PATCH /:id</code>, <strong>duas</strong> mudanças. Primeiro a linha da assinatura, que ganha os dois middlewares (e por isso vira chamada de várias linhas, igual ao <code>POST</code> acima); depois a checagem de posse, logo abaixo do <code>if (!aulaExistente)</code> que já existe:</p>
   </div>
-  <pre><code><span class="ln-ctx">// PATCH /:id — depois do "if (!aulaExistente)"</span>
-<span class="ln-add">  if (
-    req.usuario.papel === 'instrutor' &&
-    aulaExistente.instrutor_id !== req.usuario.id
-  ) {
-    return res
-      .status(403)
-      .json({ erro: 'Você só pode editar as suas próprias aulas' });
-  }</span>
+  <pre><code><span class="ln-del">router.patch('/:id', async (req, res) => {</span>
+<span class="ln-add">router.patch(
+  '/:id',
+  autenticar,
+  autorizar('instrutor', 'admin'),
+  async (req, res) => {</span>
+<span class="ln-ctx">    const aulaExistente = await aulasRepository.buscarPorId(req.params.id);
 
-<span class="ln-ctx">// DELETE /:id — no lugar da chamada direta a aulasRepository.remover</span>
-<span class="ln-add">  const aula = await aulasRepository.buscarPorId(req.params.id);
+    if (!aulaExistente) {
+      return res.status(404).json({ erro: 'Aula não encontrada' });
+    }</span>
 
-  if (!aula) {
+<span class="ln-add">    if (
+      req.usuario.papel === 'instrutor' &&
+      aulaExistente.instrutor_id !== req.usuario.id
+    ) {
+      return res
+        .status(403)
+        .json({ erro: 'Você só pode editar as suas próprias aulas' });
+    }</span>
+
+<span class="ln-ctx">    // ...dadosAtualizados, checagem de conflito e resposta continuam iguais,
+    // só reindentados por causa da chamada de várias linhas
+  },
+);</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — rota <code>DELETE /:id</code>, também duas mudanças: a assinatura, e o corpo inteiro do handler. Hoje ele chama <code>aulasRepository.remover</code> direto e decide o <code>404</code> pelo retorno; agora precisa buscar a aula antes, pra ter o <code>instrutor_id</code> na mão e checar posse:</p>
+  </div>
+  <pre><code><span class="ln-del">router.delete('/:id', async (req, res) => {
+  const aulaRemovida = await aulasRepository.remover(req.params.id);
+
+  if (!aulaRemovida) {
     return res.status(404).json({ erro: 'Aula não encontrada' });
   }
 
-  if (req.usuario.papel === 'instrutor' && aula.instrutor_id !== req.usuario.id) {
-    return res
-      .status(403)
-      .json({ erro: 'Você só pode remover as suas próprias aulas' });
-  }
+  res.status(204).send();
+});</span>
+<span class="ln-add">router.delete(
+  '/:id',
+  autenticar,
+  autorizar('instrutor', 'admin'),
+  async (req, res) => {
+    const aula = await aulasRepository.buscarPorId(req.params.id);
 
-  await aulasRepository.remover(req.params.id);
-  res.status(204).send();</span></code></pre>
+    if (!aula) {
+      return res.status(404).json({ erro: 'Aula não encontrada' });
+    }
+
+    if (
+      req.usuario.papel === 'instrutor' &&
+      aula.instrutor_id !== req.usuario.id
+    ) {
+      return res
+        .status(403)
+        .json({ erro: 'Você só pode remover as suas próprias aulas' });
+    }
+
+    await aulasRepository.remover(req.params.id);
+    res.status(204).send();
+  },
+);</span></code></pre>
+  <div class="warn">
+    <p><strong>Middleware esquecido na assinatura é o erro mais caro desta parte</strong>, e o mais silencioso: a rota continua respondendo, mas <code>req.usuario</code> não existe, então <code>req.usuario.papel</code> lança <code>TypeError</code> e o error handler devolve <code>500</code> — com ou sem token no header. Se um <code>PATCH</code> ou <code>DELETE</code> de aula responder <code>500</code> depois desta seção, confira a linha da assinatura antes de procurar qualquer outra coisa. Ao terminar, as rotas de <code>/aulas</code> com <code>autenticar</code> devem ser exatamente seis: <code>POST /</code>, <code>PATCH /:id</code>, <code>DELETE /:id</code>, <code>POST /:id/matriculas</code>, <code>PATCH /:id/matriculas/:matriculaId</code> e <code>GET /:id/matriculas</code>. As duas de leitura pública (<code>GET /</code> e <code>GET /:id</code>) ficam sem. Confira contando: <code>grep -c autenticar routes/aulas.js</code> deve dar <code>7</code> (as seis rotas mais a linha do <code>require</code>).</p>
+  </div>
   <div class="callout">
     <p>Repare que a checagem "sou instrutor e o recurso é meu?" apareceu <strong>quatro vezes</strong> nesta seção, quase idêntica. Isso é sinal de padrão emergindo — e é exatamente o tipo de repetição que merece virar uma função (<code>ehDonoDaAula(usuario, aula)</code>) ou até um middleware que busca a aula e checa posse de uma vez. Não vamos extrair agora, de propósito: com quatro usos você <em>vê</em> o padrão; extraindo no primeiro, você adivinha. Fica anotado como refatoração natural.</p>
   </div>

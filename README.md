@@ -44,6 +44,10 @@ Trilha específica de stack (complementa a API REST, que é conceitual/independe
 8. [Refresh token](node-express/08-refresh-token.html) — access token curto + refresh token longo guardado em hash no banco, rotação a cada uso com detecção de reuso, e logout de verdade (revogação).
 9. [Segurança de borda](node-express/09-seguranca-de-borda.html) — rate limit contra força bruta no login (`429`), headers de segurança com `helmet`, CORS (o que é e o que não é), limite de tamanho de body e a ordem correta dos middlewares.
 10. [Papéis e autorização](node-express/10-papeis-e-autorizacao.html) — matriz de permissões por papel (aluno/instrutor/admin), login de instrutor, papel dentro do JWT, middleware `autorizar` como fábrica de middleware, e posse do recurso onde papel não basta.
+11. [Cookie httpOnly](node-express/11-cookie-httponly.html) — refresh token fora do alcance do JavaScript (XSS), atributos do cookie (`HttpOnly`, `Secure`, `SameSite`, `Path`), CSRF e por que ele fica limitado aqui, e CORS com credenciais.
+12. [Validação e erros de domínio](node-express/12-validacao-e-erros.html) — schemas com Zod em vez de `if (!campo)`, middleware `validar` para body/params/query, resposta `400` com erro por campo, e uma classe de erro de domínio traduzida em HTTP num lugar só.
+13. [Transações e concorrência](node-express/13-transacoes-e-concorrencia.html) — a condição de corrida reproduzida de verdade, por que ela acontece com Node single-thread, `BEGIN`/`COMMIT` com client dedicado do pool, `SELECT ... FOR UPDATE` e *compare-and-set* na rotação de refresh.
+14. [Migrations](node-express/14-migrations.html) — o `schema.sql` que diverge do banco (com o diagnóstico real do projeto), `node-pg-migrate`, migration de baseline num banco que já existe, `up`/`down`, e migrations no deploy.
 
 ## Estrutura do repositório
 
@@ -69,7 +73,11 @@ estudo/
     ├── 07-autenticacao-jwt.html
     ├── 08-refresh-token.html
     ├── 09-seguranca-de-borda.html
-    └── 10-papeis-e-autorizacao.html
+    ├── 10-papeis-e-autorizacao.html
+    ├── 11-cookie-httponly.html
+    ├── 12-validacao-e-erros.html
+    ├── 13-transacoes-e-concorrencia.html
+    └── 14-migrations.html
 ```
 
 Novas trilhas de estudo entram como novos diretórios na raiz, seguindo o mesmo padrão: arquivos HTML numerados em ordem de leitura.

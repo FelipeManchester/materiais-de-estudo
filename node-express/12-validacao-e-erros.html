@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Validação e erros de domínio</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="11-cookie-httponly.html">&larr; 11. Cookie httpOnly</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#auditoria">1. O que a API aceita hoje</a></li>
+    <li><a href="#por-que-nao-na-mao">2. Por que <code>if (!campo)</code> não escala</a></li>
+    <li><a href="#zod">3. Schema como contrato: por que Zod</a></li>
+    <li><a href="#instalando">4. Instalando e falando português</a></li>
+    <li><a href="#primeiro-schema">5. O primeiro schema: aluno</a></li>
+    <li><a href="#strict">6. Campo desconhecido é erro, não detalhe</a></li>
+    <li><a href="#middleware">7. O middleware validar</a></li>
+    <li><a href="#formato-erro">8. O formato do 400</a></li>
+    <li><a href="#aplicando-alunos">9. Aplicando em routes/alunos.js</a></li>
+    <li><a href="#schemas-restantes">10. Schemas de instrutor e aula</a></li>
+    <li><a href="#patch-parcial">11. PATCH parcial e o corpo vazio</a></li>
+    <li><a href="#params-query">12. Validando params e query</a></li>
+    <li><a href="#erro-dominio">13. Erros de domínio</a></li>
+    <li><a href="#testando">14. Testando com curl</a></li>
+    <li><a href="#erros-comuns">15. Erros comuns</a></li>
+    <li><a href="#proximos-passos">16. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="13-transacoes-e-concorrencia.html">13. Transações e concorrência &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 12</div>
+  <h1>Validação e erros de domínio</h1>
+  <p class="subtitle">Cinco partes seguidas cuidaram de quem pode fazer o quê. Nenhuma delas olhou <em>o que</em> está sendo enviado: até agora, <code>data_nascimento: "banana"</code> atravessa a API inteira e só morre no Postgres, virando um <code>500</code> que culpa o servidor por um erro do cliente.</p>
+
+  <h2 id="auditoria">1. O que a API aceita hoje</h2>
+  <p>Toda validação do projeto tem a mesma forma, desde a parte 4: <code>if (!nome || !email)</code>. Isso responde uma pergunta só — "o campo veio?" — e nenhuma outra. Veja o que passa:</p>
+  <table>
+    <thead><tr><th>Requisição</th><th>O que deveria acontecer</th><th>O que acontece hoje</th></tr></thead>
+    <tbody>
+      <tr><td><code>{"data_nascimento": "banana"}</code></td><td><code>400</code>, data inválida</td><td><span class="badge badge-err">500</span> — o Postgres rejeita, o erro sobe como falha interna</td></tr>
+      <tr><td><code>{"capacidade_maxima": -5}</code></td><td><code>400</code>, precisa ser positivo</td><td><span class="badge badge-err">500</span> — estoura no <code>CHECK</code> da parte 3</td></tr>
+      <tr><td><code>{"email": "nao-e-email"}</code></td><td><code>400</code>, formato inválido</td><td><span class="badge badge-err">201</span> — grava feliz, e esse aluno nunca vai conseguir recuperar senha</td></tr>
+      <tr><td><code>{"nome": "   "}</code></td><td><code>400</code>, nome vazio</td><td><span class="badge badge-err">201</span> — o <code>if (!nome)</code> só pega string vazia, não espaços</td></tr>
+      <tr><td><code>{"duracao_minutos": "60"}</code> (string)</td><td>aceitar, convertendo pra número</td><td><span class="badge badge-warn">funciona por acidente</span> — o driver <code>pg</code> converte, e a comparação da parte 10 quebrou por causa disso</td></tr>
+      <tr><td><code>{"nome": "Ana", "nomee": "Ana"}</code></td><td><code>400</code>, campo desconhecido</td><td><span class="badge badge-err">201</span> — o typo é ignorado em silêncio</td></tr>
+      <tr><td><code>{"senha": "1"}</code></td><td><code>400</code>, senha curta demais</td><td><span class="badge badge-err">201</span> — todo o cuidado da parte 7 protegendo uma senha de um caractere</td></tr>
+      <tr><td><code>{"dia_semana": "sabadao"}</code></td><td><code>400</code>, valor fora da lista</td><td><span class="badge badge-err">500</span> — o <code>CHECK</code> do banco recusa</td></tr>
+    </tbody>
+  </table>
+  <div class="warn">
+    <p>Repare no padrão dos <code>500</code>: em quase todos, <strong>o banco está fazendo o trabalho de validação</strong>. As constraints da parte 3 (<code>CHECK</code>, <code>NOT NULL</code>, tipos) seguram a integridade dos dados — e é ótimo que segurem, é a última linha de defesa. Mas elas não sabem responder HTTP: o erro chega como exceção genérica, o error handler devolve <code>500</code>, e o cliente ouve "erro interno no servidor" quando o problema estava no que ele mandou. Status errado, mensagem inútil, e um log de erro seu poluído com problemas que não são seus.</p>
+  </div>
+
+  <h2 id="por-que-nao-na-mao">2. Por que <code>if (!campo)</code> não escala</h2>
+  <p>A reação natural é escrever mais <code>if</code>. Tente mentalmente, só pro <code>POST /alunos</code>: checar presença dos 4 campos, tipo de cada um, <code>nome</code> não-vazio depois de tirar espaços, tamanho máximo pra caber no <code>VARCHAR(120)</code>, formato de email, data que existe de verdade (<code>2026-02-31</code> não existe), senha com mínimo razoável, e nenhum campo estranho. São umas 20 linhas de <code>if</code> — numa rota que tem 8 linhas de lógica de verdade.</p>
+  <p>Multiplicado por 9 rotas de escrita, três problemas aparecem:</p>
+  <ul>
+    <li><strong>A regra fica espalhada.</strong> "Nome tem no máximo 120 caracteres" vira uma linha no <code>POST</code> e outra, quase igual, no <code>PATCH</code>. Uma hora as duas divergem.</li>
+    <li><strong>As mensagens ficam inconsistentes.</strong> Cada rota inventa o próprio texto e o próprio formato de resposta — o cliente não consegue tratar erro de forma genérica.</li>
+    <li><strong>O que não foi escrito não existe.</strong> Validação na mão é lista de casos lembrados. O caso esquecido não dá erro: ele passa.</li>
+  </ul>
+  <p>A alternativa é declarar o <strong>formato esperado</strong> uma vez, num objeto, e deixar uma biblioteca conferir. Em vez de descrever como rejeitar, você descreve o que aceita.</p>
+
+  <h2 id="zod">3. Schema como contrato: por que Zod</h2>
+  <p>As duas opções mais usadas em Node são <strong>Joi</strong> e <strong>Zod</strong>. As duas resolvem o problema; a escolha aqui é o Zod, por três motivos:</p>
+  <table>
+    <thead><tr><th></th><th>Zod <span class="badge badge-ok">escolhido</span></th><th>Joi</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Escrita</strong></td><td><code>z.string().min(2)</code> — encadeado, e o schema é um objeto JavaScript comum.</td><td><code>Joi.string().min(2)</code> — muito parecido, honestamente.</td></tr>
+      <tr><td><strong>Erros</strong></td><td>Array de <em>issues</em> com <code>path</code>, <code>code</code> e <code>message</code> — fácil de virar resposta por campo.</td><td>Também estruturado, formato um pouco mais verboso.</td></tr>
+      <tr><td><strong>TypeScript</strong></td><td>O schema <em>gera</em> o tipo. Se um dia a trilha migrar pra TS, o trabalho já está feito.</td><td>Tipagem é manual e separada.</td></tr>
+      <tr><td><strong>Idioma</strong></td><td>Traz traduções prontas, inclusive pt-BR (seção 4).</td><td>Mensagens em inglês, tradução na mão.</td></tr>
+    </tbody>
+  </table>
+  <p>Nenhum dos dois é errado. Se você herdar um projeto com Joi, não troque por trocar — o ganho está em ter <em>um</em> jeito de validar, não em qual dos dois.</p>
+
+  <h2 id="instalando">4. Instalando e falando português</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span> na raiz do projeto:</p>
+  </div>
+  <pre><code>npm install zod</code></pre>
+  <p>Por padrão as mensagens do Zod vêm em inglês (<code>"Invalid email address"</code>). Como toda a API responde em português desde a parte 4, vale configurar o idioma uma vez, globalmente.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">schemas/index.js</span> — diretório novo, e um arquivo que serve de ponto de entrada: configura o idioma e reexporta os schemas das próximas seções.</p>
+  </div>
+  <pre><code>const { z } = require('zod');
+
+// Mensagens de erro em pt-BR, para todos os schemas do projeto.
+z.config(z.locales.pt());
+
+module.exports = {};</code></pre>
+  <p>O <code>module.exports</code> vazio é temporário — as seções 5 e 10 preenchem. O importante é que <code>z.config</code> rode <strong>uma vez</strong>, e antes de qualquer schema ser usado: por isso ele mora no arquivo que todo mundo importa.</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Sem <code>z.config</code></h4>
+      <pre><code>"Invalid email address"
+"Too small: expected string
+ to have >=8 characters"</code></pre>
+    </div>
+    <div class="good">
+      <h4>Com <code>z.config</code></h4>
+      <pre><code>"endereço de e-mail inválido"
+"Muito pequeno: esperado que
+ string tivesse >=8 caracteres"</code></pre>
+    </div>
+  </div>
+
+  <h2 id="primeiro-schema">5. O primeiro schema: aluno</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">schemas/alunoSchema.js</span> — o formato de um cadastro de aluno, campo a campo:</p>
+  </div>
+  <pre><code>const { z } = require('zod');
+
+const criarAlunoSchema = z.strictObject({
+  nome: z.string().trim().min(2).max(120),
+  email: z.email().max(160),
+  data_nascimento: z.iso.date(),
+  senha: z.string().min(8).max(72),
+});
+
+module.exports = { criarAlunoSchema };</code></pre>
+  <p>Cada linha responde uma das falhas da seção 1:</p>
+  <table>
+    <thead><tr><th>Regra</th><th>De onde ela vem</th></tr></thead>
+    <tbody>
+      <tr><td><code>.trim()</code></td><td>Não é só validação — <strong>transforma</strong>. <code>" Carla "</code> vira <code>"Carla"</code> antes de chegar no banco, e <code>"   "</code> vira <code>""</code>, que aí falha no <code>.min(2)</code>.</td></tr>
+      <tr><td><code>.max(120)</code></td><td>O <code>VARCHAR(120)</code> da tabela <code>alunos</code> (parte 3). Schema e banco precisam concordar, senão o erro só aparece no <code>INSERT</code>.</td></tr>
+      <tr><td><code>z.email()</code></td><td>Formato de email. Não garante que o endereço existe — isso só um email de confirmação resolve — mas elimina o obviamente errado.</td></tr>
+      <tr><td><code>z.iso.date()</code></td><td>Exige <code>AAAA-MM-DD</code> e uma data que exista de verdade: <code>2026-02-31</code> é rejeitado.</td></tr>
+      <tr><td><code>.min(8)</code> na senha</td><td>Regra de negócio que a parte 7 deixou implícita. Sem ela, todo o bcrypt do mundo protege uma senha de um caractere.</td></tr>
+      <tr><td><code>.max(72)</code> na senha</td><td>Limite técnico do bcrypt: ele ignora tudo além de 72 bytes. Recusar é mais honesto do que aceitar e truncar em silêncio.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="strict">6. Campo desconhecido é erro, não detalhe</h2>
+  <p>Repare que o schema usa <code>z.strictObject</code>, não <code>z.object</code>. A diferença é o que acontece com um campo que você não declarou:</p>
+  <table>
+    <thead><tr><th></th><th><code>z.object</code></th><th><code>z.strictObject</code></th></tr></thead>
+    <tbody>
+      <tr><td>Campo extra no body</td><td>Ignorado em silêncio, some do resultado.</td><td><code>400</code> — "Chave desconhecida".</td></tr>
+    </tbody>
+  </table>
+  <p>Ignorar parece mais gentil, e é a escolha errada aqui. Pensa em quem manda <code>{"nomee": "Ana", ...}</code>: com <code>z.object</code>, a API responde <code>201</code>, o aluno é criado sem nome... exceto que <code>nome</code> era obrigatório, então na verdade dá erro de campo faltando — e o cliente fica olhando pro payload dele jurando que mandou o nome. Pior ainda no <code>PATCH</code>, onde tudo é opcional: <code>{"especialidadee": "yoga"}</code> responderia <code>200</code> sem ter alterado nada.</p>
+  <div class="rule">
+    <span class="tag">Quando ignorar é a escolha certa</span>
+    <p><code>z.object</code> faz sentido em API pública com muitos clientes antigos, onde alguém pode estar mandando um campo que você removeu há dois anos — recusar quebraria integrações que funcionavam. É o mesmo raciocínio de compatibilidade da parte 3 da trilha API REST. Num projeto onde você controla os dois lados, ser rígido é melhor: o erro aparece na hora, não vira dado silenciosamente perdido.</p>
+  </div>
+
+  <h2 id="middleware">7. O middleware validar</h2>
+  <p>O schema sozinho não faz nada — precisa rodar antes do handler. E como cada rota valida um schema diferente, o middleware precisa ser configurável: mesma estrutura do <code>autorizar</code> da parte 10, uma <strong>fábrica de middleware</strong>.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">middlewares/validar.js</span> — ao lado do <code>autenticar.js</code> e do <code>autorizar.js</code>:</p>
+  </div>
+  <pre><code>function validar(schemas) {
+  return (req, res, next) => {
+    for (const origem of ['body', 'params', 'query']) {
+      const schema = schemas[origem];
+
+      if (!schema) continue;
+
+      const resultado = schema.safeParse(req[origem]);
+
+      if (!resultado.success) {
+        return res.status(400).json({
+          erro: 'Dados inválidos',
+          detalhes: resultado.error.issues.map((problema) => ({
+            campo: problema.path.join('.') || origem,
+            mensagem: problema.message,
+          })),
+        });
+      }
+
+      req[origem] = resultado.data;
+    }
+
+    next();
+  };
+}
+
+module.exports = validar;</code></pre>
+  <p>Três decisões dentro dessas linhas:</p>
+  <ul>
+    <li><strong><code>safeParse</code>, não <code>parse</code>.</strong> O <code>parse</code> lança exceção; o <code>safeParse</code> devolve <code>{ success, data | error }</code>. Como o erro de validação é um caminho <em>esperado</em> — cliente errando é rotina, não excepcional — tratar por retorno fica mais direto do que por <code>try/catch</code>.</li>
+    <li><strong><code>req[origem] = resultado.data</code>.</strong> A linha mais importante e a mais fácil de esquecer: ela substitui o dado cru pelo dado <strong>validado e transformado</strong>. Sem ela, o <code>.trim()</code> e as conversões de tipo não chegam no handler, e o schema vira só um porteiro.</li>
+    <li><strong>O laço nas três origens.</strong> <code>validar({ body: X })</code> valida só o body; <code>validar({ params: Y, body: X })</code> valida os dois. Uma rota que não passa <code>query</code> nem paga o custo.</li>
+  </ul>
+  <div class="callout">
+    <p><code>problema.path.join('.')</code> monta o nome do campo — <code>['email']</code> vira <code>"email"</code>. Quando o erro é do objeto inteiro (seção 11), <code>path</code> vem vazio e o <code>|| origem</code> entra como reserva, resultando em <code>"body"</code>.</p>
+  </div>
+
+  <h2 id="formato-erro">8. O formato do 400</h2>
+  <p>Toda resposta de erro da API, desde a parte 4, tem a forma <code>{ "erro": "mensagem" }</code>. Validação precisa de mais: um <code>POST</code> pode errar cinco campos de uma vez, e mandar só o primeiro obriga o cliente a descobrir os problemas um por requisição.</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Requisição</h4>
+      <pre><code>{
+  "nome": "A",
+  "email": "nao-e-email",
+  "data_nascimento": "banana",
+  "senha": "123"
+}</code></pre>
+    </div>
+    <div class="good">
+      <h4>Resposta <code>400</code></h4>
+      <pre><code>{
+  "erro": "Dados inválidos",
+  "detalhes": [
+    { "campo": "nome",
+      "mensagem": "Muito pequeno: ..." },
+    { "campo": "email",
+      "mensagem": "endereço de e-mail inválido" },
+    { "campo": "data_nascimento",
+      "mensagem": "data ISO inválido" },
+    { "campo": "senha",
+      "mensagem": "Muito pequeno: ..." }
+  ]
+}</code></pre>
+    </div>
+  </div>
+  <p>O campo <code>erro</code> continua lá, então quem já tratava a API não quebra — <code>detalhes</code> é informação a mais, não formato novo. Um front-end usa isso pra pintar de vermelho exatamente os campos errados do formulário, em uma ida ao servidor.</p>
+
+  <h2 id="aplicando-alunos">9. Aplicando em routes/alunos.js</h2>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">schemas/index.js</span> — reexporte o schema criado na seção 5, pra que as rotas importem tudo de um lugar só:</p>
+  </div>
+  <pre><code>const { z } = require('zod');
+
+z.config(z.locales.pt());
+
+<span class="ln-del">module.exports = {};</span>
+<span class="ln-add">const { criarAlunoSchema } = require('./alunoSchema');
+
+module.exports = { criarAlunoSchema };</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/alunos.js</span> — no topo, adicione os dois imports junto dos que já existem:</p>
+  </div>
+  <pre><code><span class="ln-ctx">const autorizar = require('../middlewares/autorizar');</span>
+<span class="ln-add">const validar = require('../middlewares/validar');
+const { criarAlunoSchema } = require('../schemas');</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/alunos.js</span> — rota <code>POST /</code>. A assinatura ganha o middleware, e as validações manuais saem de dentro do handler (o <code>if</code> de campos obrigatórios não tem mais função — o schema cobre isso e muito mais):</p>
+  </div>
+  <pre><code><span class="ln-del">router.post('/', async (req, res) => {</span>
+<span class="ln-add">router.post('/', validar({ body: criarAlunoSchema }), async (req, res) => {</span>
+  const { nome, email, data_nascimento, senha } = req.body;
+
+<span class="ln-del">  if (!nome || !email || !data_nascimento || !senha) {
+    return res.status(400).json({
+      erro: 'nome, email, data_nascimento e senha são obrigatórios',
+    });
+  }</span>
+
+<span class="ln-ctx">  const senha_hash = await hashSenha(senha);
+  // ...resto do handler continua igual</span></code></pre>
+  <div class="rule">
+    <span class="tag">Por que validar vem depois de autenticar e autorizar</span>
+    <p>Nas rotas protegidas a ordem será <code>autenticar, autorizar(...), validar(...)</code>. Faz diferença: quem não está autenticado recebe <code>401</code> sem a API gastar tempo validando um corpo que ela ia recusar de qualquer jeito, e — mais importante — sem receber pistas. Um <code>400</code> detalhado antes do <code>403</code> contaria pra um estranho exatamente qual é o formato dos seus dados internos. Autenticação e autorização primeiro, sempre.</p>
+  </div>
+
+  <h2 id="schemas-restantes">10. Schemas de instrutor e aula</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">schemas/instrutorSchema.js</span>:</p>
+  </div>
+  <pre><code>const { z } = require('zod');
+
+const criarInstrutorSchema = z.strictObject({
+  nome: z.string().trim().min(2).max(120),
+  especialidade: z.string().trim().min(2).max(80),
+  email: z.email().max(160).optional(),
+  senha: z.string().min(8).max(72).optional(),
+  papel: z.enum(['instrutor', 'admin']).optional(),
+});
+
+module.exports = { criarInstrutorSchema };</code></pre>
+  <p>Os três <code>.optional()</code> vêm direto da decisão da parte 10: admin pode cadastrar um instrutor que ainda não loga, e o <code>papel</code> tem <code>DEFAULT 'instrutor'</code> no banco. Já o <code>z.enum</code> repete, no schema, exatamente a lista do <code>CHECK</code> da tabela — assim o valor errado vira <code>400</code> antes de virar <code>500</code>.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">schemas/aulaSchema.js</span> — o mais interessante dos três, porque a tabela <code>aulas</code> tem tipos que não são só texto:</p>
+  </div>
+  <pre><code>const { z } = require('zod');
+
+const DIAS = [
+  'segunda',
+  'terca',
+  'quarta',
+  'quinta',
+  'sexta',
+  'sabado',
+  'domingo',
+];
+
+const criarAulaSchema = z.strictObject({
+  nome: z.string().trim().min(2).max(120),
+  instrutor_id: z.coerce.number().int().positive(),
+  dia_semana: z.enum(DIAS),
+  hora_inicio: z.iso.time(),
+  duracao_minutos: z.coerce.number().int().positive().max(480),
+  capacidade_maxima: z.coerce.number().int().positive().max(200),
+});
+
+module.exports = { criarAulaSchema, DIAS };</code></pre>
+  <table>
+    <thead><tr><th>Regra</th><th>Por quê</th></tr></thead>
+    <tbody>
+      <tr><td><code>z.coerce.number()</code></td><td>Aceita <code>3</code> e <code>"3"</code>, entregando sempre <code>3</code> pro handler. Isso <strong>resolve na raiz</strong> a armadilha da parte 10: a comparação <code>Number(instrutor_id) !== req.usuario.id</code> existia porque o campo podia chegar como string. Depois do <code>validar</code>, não pode mais.</td></tr>
+      <tr><td><code>z.iso.time()</code></td><td>Aceita <code>"07:00"</code> e <code>"07:00:00"</code>, recusa <code>"25:00"</code> e <code>"7:00"</code>. O tipo <code>TIME</code> do Postgres aceita as duas formas válidas.</td></tr>
+      <tr><td><code>.max(480)</code> / <code>.max(200)</code></td><td>Tetos de sanidade que o banco não tem: o <code>CHECK</code> só exige <code>&gt; 0</code>, então uma aula de 100 mil minutos passaria. Limite absurdo quase sempre é erro de digitação.</td></tr>
+    </tbody>
+  </table>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">schemas/index.js</span> — reexporte os dois schemas novos:</p>
+  </div>
+  <pre><code>const { criarAlunoSchema } = require('./alunoSchema');
+<span class="ln-add">const { criarInstrutorSchema } = require('./instrutorSchema');
+const { criarAulaSchema } = require('./aulaSchema');</span>
+
+<span class="ln-del">module.exports = { criarAlunoSchema };</span>
+<span class="ln-add">module.exports = {
+  criarAlunoSchema,
+  criarInstrutorSchema,
+  criarAulaSchema,
+};</span></code></pre>
+
+  <h2 id="patch-parcial">11. PATCH parcial e o corpo vazio</h2>
+  <p><code>PATCH</code> é atualização parcial (parte 2 da trilha API REST): manda só o que muda. O schema de criação exige todos os campos, então reaproveitá-lo direto quebraria a semântica — mas reescrever tudo de novo com <code>.optional()</code> em cada linha duplicaria as regras.</p>
+  <p><code>.partial()</code> resolve: ele pega um schema e torna todos os campos opcionais, mantendo as validações de cada um.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">schemas/aulaSchema.js</span> — adicione o schema de atualização depois do <code>criarAulaSchema</code>, e inclua no <code>module.exports</code>:</p>
+  </div>
+  <pre><code><span class="ln-add">const atualizarAulaSchema = criarAulaSchema
+  .partial()
+  .refine((dados) => Object.keys(dados).length > 0, {
+    message: 'Envie ao menos um campo para atualizar',
+  });</span>
+
+<span class="ln-del">module.exports = { criarAulaSchema, DIAS };</span>
+<span class="ln-add">module.exports = { criarAulaSchema, atualizarAulaSchema, DIAS };</span></code></pre>
+  <p>O <code>.refine</code> cobre o caso que o <code>.partial()</code> abre: se tudo é opcional, <code>{}</code> é válido — e um <code>PATCH</code> com corpo vazio responderia <code>200</code> sem ter feito nada. Um <code>400</code> dizendo "envie ao menos um campo" é mais útil do que um sucesso que não aconteceu.</p>
+  <div class="callout">
+    <p>Esse erro não pertence a nenhum campo específico, então o Zod devolve <code>path: []</code>. É exatamente o caso que o <code>|| origem</code> do middleware (seção 7) cobre: o cliente recebe <code>{ "campo": "body", "mensagem": "Envie ao menos um campo para atualizar" }</code>.</p>
+  </div>
+  <p>Faça o mesmo par para instrutor, que também tem <code>PATCH</code>:</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">schemas/instrutorSchema.js</span> — mesmo padrão, e ajuste o <code>module.exports</code>:</p>
+  </div>
+  <pre><code><span class="ln-add">const atualizarInstrutorSchema = criarInstrutorSchema
+  .partial()
+  .refine((dados) => Object.keys(dados).length > 0, {
+    message: 'Envie ao menos um campo para atualizar',
+  });</span>
+
+<span class="ln-del">module.exports = { criarInstrutorSchema };</span>
+<span class="ln-add">module.exports = { criarInstrutorSchema, atualizarInstrutorSchema };</span></code></pre>
+
+  <h2 id="params-query">12. Validando params e query</h2>
+  <p>Body não é a única entrada. <code>GET /alunos/abc/matriculas</code> chega no repository com <code>"abc"</code> onde deveria ir um id, e <code>GET /aulas?instrutor_id=xyz</code> idem. Os dois viram erro do Postgres — <code>500</code> de novo.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">schemas/comumSchema.js</span> — schemas pequenos que várias rotas reaproveitam:</p>
+  </div>
+  <pre><code>const { z } = require('zod');
+
+const idParamSchema = z.object({
+  id: z.coerce.number().int().positive(),
+});
+
+const idsMatriculaParamSchema = z.object({
+  id: z.coerce.number().int().positive(),
+  matriculaId: z.coerce.number().int().positive(),
+});
+
+const listarAulasQuerySchema = z.object({
+  instrutor_id: z.coerce.number().int().positive().optional(),
+});
+
+module.exports = {
+  idParamSchema,
+  idsMatriculaParamSchema,
+  listarAulasQuerySchema,
+};</code></pre>
+  <div class="warn">
+    <p>Repare que aqui é <code>z.object</code>, não <code>z.strictObject</code>. Em <code>params</code> isso é indiferente (o Express só põe ali o que a rota declarou), mas em <code>query</code> a diferença importa: <code>strictObject</code> faria <code>GET /aulas?utm_source=instagram</code> responder <code>400</code>. Parâmetro de rastreamento colado na URL por um link compartilhado é rotina — recusar a requisição por causa dele quebraria a navegação por um motivo que não é do usuário.</p>
+  </div>
+  <p>A coerção brilha aqui: <code>req.params.id</code> é <strong>sempre</strong> string (tudo que vem da URI é texto, como a parte 7 avisou), e depois do <code>validar</code> ele chega no handler como número. Aquela comparação <code>Number(req.params.id) !== req.usuario.id</code> da parte 10 pode virar só <code>req.params.id !== req.usuario.id</code> — mas cuidado: <strong>só</strong> nas rotas onde você aplicou o middleware. Enquanto a conversão não estiver em todas, manter o <code>Number()</code> é mais seguro do que remover pela metade.</p>
+
+  <h3>Onde entra em cada rota</h3>
+  <p>A seção 9 mostrou o padrão em <code>POST /alunos</code>. Falta aplicá-lo nas outras oito rotas de escrita e nas que recebem <code>:id</code>. Esta é a lista completa — nenhuma outra rota muda:</p>
+  <table>
+    <thead><tr><th>Arquivo</th><th>Rota</th><th>O que passar pro <code>validar</code></th></tr></thead>
+    <tbody>
+      <tr><td rowspan="2"><code>routes/alunos.js</code></td><td><code>POST /</code></td><td><code>{ body: criarAlunoSchema }</code> <span class="badge badge-ok">feito na seção 9</span></td></tr>
+      <tr><td><code>GET /:id/matriculas</code></td><td><code>{ params: idParamSchema }</code></td></tr>
+      <tr><td rowspan="3"><code>routes/instrutores.js</code></td><td><code>GET /:id</code></td><td><code>{ params: idParamSchema }</code></td></tr>
+      <tr><td><code>POST /</code></td><td><code>{ body: criarInstrutorSchema }</code></td></tr>
+      <tr><td><code>PATCH /:id</code> e <code>DELETE /:id</code></td><td><code>{ params: idParamSchema, body: atualizarInstrutorSchema }</code> no <code>PATCH</code>; só <code>params</code> no <code>DELETE</code></td></tr>
+      <tr><td rowspan="6"><code>routes/aulas.js</code></td><td><code>GET /</code></td><td><code>{ query: listarAulasQuerySchema }</code></td></tr>
+      <tr><td><code>GET /:id</code> e <code>DELETE /:id</code></td><td><code>{ params: idParamSchema }</code></td></tr>
+      <tr><td><code>POST /</code></td><td><code>{ body: criarAulaSchema }</code></td></tr>
+      <tr><td><code>PATCH /:id</code></td><td><code>{ params: idParamSchema, body: atualizarAulaSchema }</code></td></tr>
+      <tr><td><code>POST /:id/matriculas</code> e <code>GET /:id/matriculas</code></td><td><code>{ params: idParamSchema }</code></td></tr>
+      <tr><td><code>PATCH /:id/matriculas/:matriculaId</code></td><td><code>{ params: idsMatriculaParamSchema, body: cancelarMatriculaSchema }</code></td></tr>
+    </tbody>
+  </table>
+  <p>Falta um schema dessa lista — o do cancelamento, que hoje é validado por um <code>if (status !== 'cancelada')</code> dentro da rota (parte 6).</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">schemas/comumSchema.js</span> — adicione o schema no fim do arquivo e inclua no <code>module.exports</code>:</p>
+  </div>
+  <pre><code><span class="ln-add">const cancelarMatriculaSchema = z.strictObject({
+  status: z.literal('cancelada'),
+});</span>
+
+module.exports = {
+  idParamSchema,
+  idsMatriculaParamSchema,
+  listarAulasQuerySchema,
+<span class="ln-add">  cancelarMatriculaSchema,</span>
+};</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">schemas/index.js</span> — reexporte os quatro schemas comuns junto dos que já estão lá:</p>
+  </div>
+  <pre><code>const { criarAlunoSchema } = require('./alunoSchema');
+const {
+  criarInstrutorSchema,
+  atualizarInstrutorSchema,
+} = require('./instrutorSchema');
+const { criarAulaSchema, atualizarAulaSchema } = require('./aulaSchema');
+<span class="ln-add">const {
+  idParamSchema,
+  idsMatriculaParamSchema,
+  listarAulasQuerySchema,
+  cancelarMatriculaSchema,
+} = require('./comumSchema');</span>
+
+module.exports = {
+  criarAlunoSchema,
+  criarInstrutorSchema,
+<span class="ln-add">  atualizarInstrutorSchema,</span>
+  criarAulaSchema,
+<span class="ln-add">  atualizarAulaSchema,
+  idParamSchema,
+  idsMatriculaParamSchema,
+  listarAulasQuerySchema,
+  cancelarMatriculaSchema,</span>
+};</code></pre>
+  <p>Agora as assinaturas. Em toda rota protegida, <code>validar</code> entra <strong>depois</strong> de <code>autenticar</code> e <code>autorizar</code> (seção 9).</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/alunos.js</span> — importe o schema novo e ajuste a assinatura de <code>GET /:id/matriculas</code>:</p>
+  </div>
+  <pre><code><span class="ln-del">const { criarAlunoSchema } = require('../schemas');</span>
+<span class="ln-add">const { criarAlunoSchema, idParamSchema } = require('../schemas');</span>
+
+<span class="ln-del">router.get('/:id/matriculas', autenticar, async (req, res) => {</span>
+<span class="ln-add">router.get(
+  '/:id/matriculas',
+  autenticar,
+  validar({ params: idParamSchema }),
+  async (req, res) => {</span>
+<span class="ln-ctx">    // ...corpo do handler continua igual, só reindentado
+  },
+);</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/instrutores.js</span> — adicione os imports no topo e ajuste as quatro assinaturas. As rotas de escrita já tinham <code>autenticar, autorizar('admin')</code> desde a parte 10:</p>
+  </div>
+  <pre><code><span class="ln-add">const validar = require('../middlewares/validar');
+const {
+  criarInstrutorSchema,
+  atualizarInstrutorSchema,
+  idParamSchema,
+} = require('../schemas');</span>
+
+<span class="ln-del">router.get('/:id', async (req, res) => {</span>
+<span class="ln-add">router.get('/:id', validar({ params: idParamSchema }), async (req, res) => {</span>
+
+<span class="ln-del">router.post('/', autenticar, autorizar('admin'), async (req, res) => {</span>
+<span class="ln-add">router.post(
+  '/',
+  autenticar,
+  autorizar('admin'),
+  validar({ body: criarInstrutorSchema }),
+  async (req, res) => {</span>
+
+<span class="ln-del">router.patch('/:id', autenticar, autorizar('admin'), async (req, res) => {</span>
+<span class="ln-add">router.patch(
+  '/:id',
+  autenticar,
+  autorizar('admin'),
+  validar({ params: idParamSchema, body: atualizarInstrutorSchema }),
+  async (req, res) => {</span>
+
+<span class="ln-del">router.delete('/:id', autenticar, autorizar('admin'), async (req, res, next) => {</span>
+<span class="ln-add">router.delete(
+  '/:id',
+  autenticar,
+  autorizar('admin'),
+  validar({ params: idParamSchema }),
+  async (req, res, next) => {</span></code></pre>
+  <div class="warn">
+    <p>Três dessas rotas passam a ser chamadas de várias linhas, então cada uma fecha agora com <code>},&#10;);</code> em vez de <code>});</code> — o mesmo cuidado da parte 10. Se o servidor não subir depois desta seção, é aqui. E ao converter o <code>POST /</code> de instrutores, apague também o <code>if (!nome || !especialidade)</code> de dentro do handler: o schema cobre isso, inclusive com a mensagem sem o typo de "orbigatórios" que está lá desde a parte 5.</p>
+  </div>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — imports no topo e as sete assinaturas. As que já eram de várias linhas só ganham a linha do <code>validar</code>:</p>
+  </div>
+  <pre><code><span class="ln-add">const validar = require('../middlewares/validar');
+const {
+  criarAulaSchema,
+  atualizarAulaSchema,
+  idParamSchema,
+  idsMatriculaParamSchema,
+  listarAulasQuerySchema,
+  cancelarMatriculaSchema,
+} = require('../schemas');</span>
+
+<span class="ln-del">router.get('/', async (req, res) => {</span>
+<span class="ln-add">router.get('/', validar({ query: listarAulasQuerySchema }), async (req, res) => {</span>
+
+<span class="ln-del">router.get('/:id', async (req, res) => {</span>
+<span class="ln-add">router.get('/:id', validar({ params: idParamSchema }), async (req, res) => {</span>
+
+<span class="ln-ctx">router.post(
+  '/',
+  autenticar,
+  autorizar('instrutor', 'admin'),</span>
+<span class="ln-add">  validar({ body: criarAulaSchema }),</span>
+<span class="ln-ctx">  async (req, res) => {</span>
+
+<span class="ln-ctx">router.patch(
+  '/:id',
+  autenticar,
+  autorizar('instrutor', 'admin'),</span>
+<span class="ln-add">  validar({ params: idParamSchema, body: atualizarAulaSchema }),</span>
+<span class="ln-ctx">  async (req, res) => {</span>
+
+<span class="ln-ctx">router.delete(
+  '/:id',
+  autenticar,
+  autorizar('instrutor', 'admin'),</span>
+<span class="ln-add">  validar({ params: idParamSchema }),</span>
+<span class="ln-ctx">  async (req, res) => {</span>
+
+<span class="ln-ctx">router.post(
+  '/:id/matriculas',
+  autenticar,
+  autorizar('aluno'),</span>
+<span class="ln-add">  validar({ params: idParamSchema }),</span>
+<span class="ln-ctx">  async (req, res, next) => {</span>
+
+<span class="ln-del">router.patch('/:id/matriculas/:matriculaId', autenticar, async (req, res) => {</span>
+<span class="ln-add">router.patch(
+  '/:id/matriculas/:matriculaId',
+  autenticar,
+  validar({
+    params: idsMatriculaParamSchema,
+    body: cancelarMatriculaSchema,
+  }),
+  async (req, res) => {</span>
+
+<span class="ln-ctx">router.get(
+  '/:id/matriculas',
+  autenticar,
+  autorizar('instrutor', 'admin'),</span>
+<span class="ln-add">  validar({ params: idParamSchema }),</span>
+<span class="ln-ctx">  async (req, res) => {</span></code></pre>
+  <p>Duas validações manuais podem sair de dentro dos handlers, porque agora são redundantes:</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — em <code>POST /</code>, apague o <code>if</code> de campos obrigatórios; em <code>PATCH /:id/matriculas/:matriculaId</code>, apague a checagem de <code>status</code>:</p>
+  </div>
+  <pre><code><span class="ln-ctx">// dentro de POST /</span>
+<span class="ln-del">    if (
+      !nome ||
+      !instrutor_id ||
+      !dia_semana ||
+      !hora_inicio ||
+      !duracao_minutos ||
+      !capacidade_maxima
+    ) {
+      return res.status(400).json({
+        erro: 'nome, instrutor_id, dia_semana, hora_inicio, duracao_minutos e capacidade_maxima são obrigatórios',
+      });
+    }</span>
+
+<span class="ln-ctx">// dentro de PATCH /:id/matriculas/:matriculaId</span>
+<span class="ln-del">  const { status } = req.body;
+
+  if (status !== 'cancelada') {
+    return res.status(400).json({ erro: "status precisa ser 'cancelada'" });
+  }</span></code></pre>
+
+  <h2 id="erro-dominio">13. Erros de domínio</h2>
+  <p>Validação resolve "o dado tem o formato certo?". Sobra a outra família de erro: o dado está bem formado, mas <strong>a operação não pode acontecer</strong> — aula sem vaga, instrutor com conflito de agenda, aluno já matriculado. Essas são as regras das partes 5 e 6, e hoje cada uma responde assim:</p>
+  <pre><code>if (totalConfirmadas &gt;= aula.capacidade_maxima) {
+  return res.status(409).json({ erro: 'Aula sem vagas disponíveis' });
+}</code></pre>
+  <p>Funciona, e tem dois incômodos. Primeiro, a regra de negócio fica amarrada ao <code>res</code>: se amanhã a checagem de capacidade descer pra uma camada de serviço (que não conhece HTTP), ela não pode mais responder assim. Segundo, cada rota decide sozinha o status — e nada impede que o mesmo erro vire <code>409</code> num lugar e <code>422</code> em outro.</p>
+  <p>A saída é um tipo de erro próprio, que carrega o status e é traduzido em HTTP num lugar só.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">errors/ErroDeDominio.js</span> — diretório novo, uma classe pequena:</p>
+  </div>
+  <pre><code>class ErroDeDominio extends Error {
+  constructor(mensagem, status = 422) {
+    super(mensagem);
+    this.name = 'ErroDeDominio';
+    this.status = status;
+  }
+}
+
+module.exports = ErroDeDominio;</code></pre>
+  <p>Herdar de <code>Error</code> é o que faz ele funcionar com <code>throw</code>, com <code>instanceof</code> e com o <em>stack trace</em>. O <code>status</code> é o que o diferencia de um erro qualquer: ele já sabe que HTTP responde a ele.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.js</span> — importe a classe no topo, junto dos outros <code>require</code>:</p>
+  </div>
+  <pre><code><span class="ln-ctx">const cookieParser = require('cookie-parser');</span>
+<span class="ln-add">const ErroDeDominio = require('./errors/ErroDeDominio');</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.js</span> — no middleware de erro do fim do arquivo. A checagem nova entra <strong>antes</strong> das duas de <code>err.type</code> que a parte 9 adicionou:</p>
+  </div>
+  <pre><code>app.use((err, req, res, _next) => {
+<span class="ln-add">  if (err instanceof ErroDeDominio) {
+    return res.status(err.status).json({ erro: err.message });
+  }</span>
+
+<span class="ln-ctx">  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ erro: 'Corpo da requisição grande demais' });
+  }
+
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ erro: 'JSON inválido' });
+  }
+
+  console.error(err);
+  res.status(500).json({ erro: 'Erro interno no servidor' });
+});</span></code></pre>
+  <p>Agora a regra pode simplesmente <strong>lançar</strong>. O Express 5 captura a rejeição de um handler <code>async</code> sozinho e entrega pro error handler — nada de <code>try/catch</code> em cada rota.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — importe a classe no topo, e converta a checagem de capacidade dentro de <code>POST /:id/matriculas</code>:</p>
+  </div>
+  <pre><code><span class="ln-add">const ErroDeDominio = require('../errors/ErroDeDominio');</span>
+
+<span class="ln-ctx">// ...dentro do handler de POST /:id/matriculas</span>
+    if (totalConfirmadas &gt;= aula.capacidade_maxima) {
+<span class="ln-del">      return res.status(409).json({ erro: 'Aula sem vagas disponíveis' });</span>
+<span class="ln-add">      throw new ErroDeDominio('Aula sem vagas disponíveis', 409);</span>
+    }</code></pre>
+  <div class="warn">
+    <p>Essa rota tem um <code>try/catch</code> em volta do <code>matriculasRepository.criar</code> (parte 6, pro código <code>23505</code>). Confira onde você colocou o <code>throw</code>: se ele cair <strong>dentro</strong> do <code>try</code>, o <code>catch</code> vai pegá-lo, não vai achar <code>err.code === '23505'</code>, e vai repassar com <code>next(err)</code> — que por sorte leva ao mesmo lugar. Funciona, mas por acidente. A checagem de capacidade vem antes do <code>try</code>, e é ali que o <code>throw</code> deve ficar.</p>
+  </div>
+  <div class="callout">
+    <p><strong>Não converta tudo de uma vez.</strong> Os outros <code>return res.status(...)</code> espalhados pelas rotas continuam funcionando perfeitamente — <code>404</code> de recurso inexistente, <code>403</code> de posse, <code>422</code> de conflito de agenda. Trocar todos agora seria uma refatoração grande, arriscada e sem ganho imediato. O padrão está montado; use-o no código novo e converta o antigo quando estiver mexendo nele por outro motivo.</p>
+  </div>
+
+  <h2 id="testando">14. Testando com curl</h2>
+  <p>Reinicie o servidor. Primeiro, o erro completo — quatro campos errados de uma vez:</p>
+  <pre><code>curl -s -X POST http://localhost:3000/alunos \
+  -H "Content-Type: application/json" \
+  -d '{"nome":"A","email":"nao-e-email","data_nascimento":"banana","senha":"123"}'
+# 400, com "detalhes" listando os quatro campos, mensagens em português</code></pre>
+  <p>Os casos da tabela da seção 1, um por um:</p>
+  <pre><code># nome só com espaços (antes: 201)
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:3000/alunos \
+  -H "Content-Type: application/json" \
+  -d '{"nome":"   ","email":"a@b.com","data_nascimento":"1990-01-01","senha":"senha123"}'
+# 400
+
+# data que não existe no calendário (antes: 500)
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:3000/alunos \
+  -H "Content-Type: application/json" \
+  -d '{"nome":"Ana","email":"a2@b.com","data_nascimento":"2026-02-31","senha":"senha123"}'
+# 400
+
+# typo no nome do campo (antes: 201 silencioso)
+curl -s -X POST http://localhost:3000/alunos \
+  -H "Content-Type: application/json" \
+  -d '{"nomee":"Ana","email":"a3@b.com","data_nascimento":"1990-01-01","senha":"senha123"}'
+# 400, com DOIS detalhes:
+#   { "campo": "nome", "mensagem": "Tipo inválido: esperado string, recebido undefined" }
+#   { "campo": "body", "mensagem": "Chave desconhecida: \"nomee\"" }
+# o segundo é o que revela o typo — sem strictObject, só o primeiro apareceria
+# e você ficaria olhando pro payload jurando que mandou o nome
+
+# cadastro válido continua funcionando, e o nome vem sem espaços
+curl -s -X POST http://localhost:3000/alunos \
+  -H "Content-Type: application/json" \
+  -d '{"nome":"  Joana Prado  ","email":"joana@example.com","data_nascimento":"1995-06-15","senha":"senha123"}'
+# 201, "nome":"Joana Prado" — o trim do schema chegou no banco</code></pre>
+  <p>Aula, com admin autenticado (pegue o token como nas partes 10 e 11):</p>
+  <pre><code># dia_semana fora da lista (antes: 500 do CHECK)
+curl -s -X POST http://localhost:3000/aulas \
+  -H "Content-Type: application/json" -H "Authorization: Bearer TOKEN_ADMIN" \
+  -d '{"nome":"Teste","instrutor_id":1,"dia_semana":"sabadao","hora_inicio":"08:00","duracao_minutos":60,"capacidade_maxima":10}'
+# 400, com a lista de valores aceitos
+
+# capacidade negativa (antes: 500)
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:3000/aulas \
+  -H "Content-Type: application/json" -H "Authorization: Bearer TOKEN_ADMIN" \
+  -d '{"nome":"Teste","instrutor_id":1,"dia_semana":"sabado","hora_inicio":"08:00","duracao_minutos":60,"capacidade_maxima":-5}'
+# 400
+
+# instrutor_id como string ainda funciona — a coerção converte
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:3000/aulas \
+  -H "Content-Type: application/json" -H "Authorization: Bearer TOKEN_ADMIN" \
+  -d '{"nome":"Coerção","instrutor_id":"1","dia_semana":"sabado","hora_inicio":"09:00","duracao_minutos":60,"capacidade_maxima":10}'
+# 201
+
+# PATCH com corpo vazio
+curl -s -X PATCH http://localhost:3000/aulas/1 \
+  -H "Content-Type: application/json" -H "Authorization: Bearer TOKEN_ADMIN" -d '{}'
+# 400, "Envie ao menos um campo para atualizar"</code></pre>
+  <p>Params e query:</p>
+  <pre><code># id que não é número (antes: 500)
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/alunos/abc/matriculas \
+  -H "Authorization: Bearer TOKEN_ALUNO"
+# 400
+
+# query com valor inválido
+curl -s -o /dev/null -w "%{http_code}\n" "http://localhost:3000/aulas?instrutor_id=xyz"
+# 400
+
+# query com parâmetro extra (utm_source) continua passando
+curl -s -o /dev/null -w "%{http_code}\n" "http://localhost:3000/aulas?utm_source=instagram"
+# 200</code></pre>
+  <p>E o erro de domínio, que precisa de uma aula lotada:</p>
+  <pre><code># crie uma aula com capacidade 1, matricule um aluno nela,
+# e tente matricular um segundo aluno:
+curl -s -X POST http://localhost:3000/aulas/ID_DA_AULA/matriculas \
+  -H "Authorization: Bearer TOKEN_DE_OUTRO_ALUNO"
+# 409, "Aula sem vagas disponíveis" — agora vindo do throw, não do return</code></pre>
+
+  <h2 id="erros-comuns">15. Erros comuns</h2>
+  <ol>
+    <li><strong>Esquecer <code>req[origem] = resultado.data</code></strong> — a validação funciona, mas o handler recebe o dado cru: sem <code>trim</code>, sem conversão de tipo. O sintoma é sutil, porque nada dá erro.</li>
+    <li><strong>Validar antes de autenticar</strong> — a ordem correta é <code>autenticar, autorizar, validar</code>. Invertida, um estranho descobre o formato dos seus dados internos (seção 9).</li>
+    <li><strong><code>z.coerce.number()</code> aceita string vazia</strong> — <code>Number("")</code> é <code>0</code>, então <code>""</code> vira <code>0</code> e passa. Por isso os schemas usam <code>.positive()</code> junto: sozinha, a coerção é mais permissiva do que parece.</li>
+    <li><strong>Usar <code>strictObject</code> na query</strong> — qualquer <code>?utm_source=...</code> de link compartilhado vira <code>400</code> (seção 12).</li>
+    <li><strong>Deixar schema e banco divergirem</strong> — <code>.max(120)</code> no schema e <code>VARCHAR(80)</code> na tabela devolve <code>500</code> pra um valor que o schema aprovou. Sempre que mexer numa coluna, olhe o schema correspondente.</li>
+    <li><strong>Remover o <code>Number()</code> das comparações antes de aplicar <code>validar</code> em todas as rotas</strong> — a coerção só existe onde o middleware roda. Meia migração é pior que nenhuma.</li>
+    <li><strong><code>throw</code> dentro de um <code>try/catch</code> existente</strong> — o <code>catch</code> intercepta o <code>ErroDeDominio</code> e o trata como erro inesperado (seção 13).</li>
+    <li><strong>Achar que validação substitui as constraints do banco</strong> — não substitui. O <code>CHECK</code> e o <code>NOT NULL</code> continuam necessários: eles protegem contra bug no código, migração manual e acesso direto pelo <code>psql</code>. Validação melhora a <em>resposta</em>; o banco garante a <em>integridade</em>.</li>
+  </ol>
+
+  <h2 id="proximos-passos">16. O que vem a seguir</h2>
+  <p>A API agora recusa entrada malformada com <code>400</code> e mensagem por campo, converte tipos antes de o handler ver o dado, e tem um jeito único de sinalizar erro de regra de negócio. Falta o terceiro item da categoria <strong>corretude e robustez</strong>, que é a próxima parte:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Transações e concorrência</strong> — duas condições de corrida estão anotadas desde que apareceram, e são o mesmo problema: ler, decidir e escrever sem nada segurar a linha no meio. Na Regra 1 (parte 6), duas matrículas simultâneas na última vaga passam as duas pela checagem de capacidade. Na rotação de refresh (parte 8), duas requisições com o mesmo token são aceitas antes de qualquer uma revogar. Entram <code>BEGIN</code>/<code>COMMIT</code>, <code>SELECT ... FOR UPDATE</code>, e o truque de fazer o próprio <code>UPDATE ... WHERE ... RETURNING *</code> ser a checagem.</li>
+    </ol>
+  </div>
+  <p>Depois dela, a ordem combinada segue: <strong>banco e dados</strong> (migrations — e aí os <code>ALTER TABLE</code> das partes 7, 8 e 10 viram arquivos versionados; limpeza de refresh tokens expirados; soft-delete de instrutor) → <strong>qualidade</strong> (Jest + supertest, CI) → <strong>contrato da API</strong> (paginação, OpenAPI — e a documentação sai quase de graça, porque os schemas desta parte descrevem o contrato de entrada) → <strong>produção</strong> (logging, health check, Dockerfile, deploy com HTTPS).</p>
+  <p>Fica registrado como dívida consciente: os <code>return res.status(...)</code> antigos continuam espalhados pelas rotas (seção 13), convertidos para <code>ErroDeDominio</code> só quando você estiver mexendo neles por outro motivo.</p>
+
+  <footer class="closing">
+    <p>Ao testar, o mais satisfatório é repetir a tabela da seção 1 e ver cada <code>500</code> virar <code>400</code> com mensagem que explica o problema. Preste atenção especial no <code>trim</code> chegando no banco e na coerção de <code>"1"</code> pra <code>1</code> — são as duas transformações que provam que o <code>req[origem] = resultado.data</code> está no lugar. Volta com dúvidas, principalmente se alguma rota começar a responder <code>400</code> pra requisição que você considera válida.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

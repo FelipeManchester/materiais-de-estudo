@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Migrations</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="13-transacoes-e-concorrencia.html">&larr; 13. Transações e concorrência</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-problema">1. O arquivo que mente</a></li>
+    <li><a href="#o-que-e">2. O que é uma migration</a></li>
+    <li><a href="#ferramenta">3. Escolhendo a ferramenta</a></li>
+    <li><a href="#instalando">4. Instalando e configurando</a></li>
+    <li><a href="#pgmigrations">5. A tabela pgmigrations</a></li>
+    <li><a href="#baseline">6. Baseline: começar com o banco já existente</a></li>
+    <li><a href="#conferindo">7. Conferindo o baseline contra o banco</a></li>
+    <li><a href="#primeira-migration">8. A primeira migration de verdade</a></li>
+    <li><a href="#api-vs-sql">9. API do pgm ou SQL cru?</a></li>
+    <li><a href="#down">10. down: reversibilidade e quando abrir mão</a></li>
+    <li><a href="#fluxo">11. O fluxo do dia a dia</a></li>
+    <li><a href="#deploy">12. Migrations e deploy</a></li>
+    <li><a href="#nao-fazer">13. O que não fazer numa migration</a></li>
+    <li><a href="#testando">14. Testando</a></li>
+    <li><a href="#erros-comuns">15. Erros comuns</a></li>
+    <li><a href="#proximos-passos">16. O que vem a seguir</a></li>
+  </ol>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 14</div>
+  <h1>Migrations</h1>
+  <p class="subtitle">Desde a parte 7, toda alteração de banco foi digitada à mão no <code>psql</code>, com o <code>db/schema.sql</code> atualizado depois — quando dava. Esta parte mostra por que esse arranjo já falhou no seu projeto (com prova), e troca ele por arquivos versionados que rodam sozinhos.</p>
+
+  <h2 id="o-problema">1. O arquivo que mente</h2>
+  <p>O <code>db/schema.sql</code> nasceu na parte 3 como a descrição do banco. Desde então, três partes mandaram alterar tabelas direto no <code>psql</code>:</p>
+  <table>
+    <thead><tr><th>Parte</th><th>Alteração</th></tr></thead>
+    <tbody>
+      <tr><td>7</td><td><code>ALTER TABLE alunos ADD COLUMN senha_hash</code></td></tr>
+      <tr><td>8</td><td><code>CREATE TABLE refresh_tokens</code> + índice</td></tr>
+      <tr><td>10</td><td><code>ALTER TABLE instrutores</code> (três colunas), <code>ALTER TABLE refresh_tokens</code> (nullable, <code>instrutor_id</code>, <code>CHECK</code>)</td></tr>
+    </tbody>
+  </table>
+  <p>Em cada uma, o material pediu para refletir a mudança no <code>schema.sql</code> logo depois. Rode este comando e compare com o que está no arquivo:</p>
+  <pre><code>docker compose exec -T db psql -U postgres -d estudo -c \
+  "SELECT column_name FROM information_schema.columns
+   WHERE table_name = 'instrutores' ORDER BY ordinal_position;"</code></pre>
+  <div class="example">
+    <div class="bad">
+      <h4><code>db/schema.sql</code> diz</h4>
+      <pre><code>CREATE TABLE instrutores (
+  id SERIAL PRIMARY KEY,
+  nome VARCHAR(120) NOT NULL,
+  especialidade VARCHAR(80) NOT NULL
+);</code></pre>
+    </div>
+    <div class="good">
+      <h4>O banco tem</h4>
+      <pre><code>id
+nome
+especialidade
+email        ← parte 10
+senha_hash   ← parte 10
+papel        ← parte 10</code></pre>
+    </div>
+  </div>
+  <div class="warn">
+    <p>Se o seu projeto estiver assim, não é descuido isolado — é o resultado previsível do processo. <strong>Manter dois lugares sincronizados na lembrança sempre falha</strong>, e falha em silêncio: o banco da sua máquina funciona, os testes passam, e o arquivo versionado — o único que outra pessoa vai ler — descreve um banco que não existe mais.</p>
+    <p>A consequência aparece quando alguém clona o projeto e monta o banco pelo <code>schema.sql</code>: cria a tabela <code>instrutores</code> sem <code>email</code> nem <code>senha_hash</code>, e a rota <code>POST /auth/instrutores/login</code> quebra. O erro vai apontar pra parte 10, escrita semanas atrás, e não pro arquivo desatualizado.</p>
+  </div>
+  <p>Existe outro problema, menos visível: <strong>não há como saber o que já foi aplicado</strong>. Você lembra de ter rodado o <code>ALTER TABLE</code> da parte 10 no banco de desenvolvimento. E no banco de teste? E no de produção, quando existir? A única forma de responder é ir olhar cada um.</p>
+
+  <h2 id="o-que-e">2. O que é uma migration</h2>
+  <p>Uma <strong>migration</strong> é um arquivo que descreve <em>uma</em> alteração no banco, com nome que define a ordem, guardado no repositório junto do código. Uma ferramenta lê esses arquivos, compara com uma tabela de controle dentro do próprio banco, e aplica só o que falta.</p>
+  <table>
+    <thead><tr><th></th><th><code>schema.sql</code> na mão</th><th>Migrations</th></tr></thead>
+    <tbody>
+      <tr><td>O que descreve</td><td>O estado final desejado.</td><td>A sequência de mudanças que leva até ele.</td></tr>
+      <tr><td>Quem aplica</td><td>Você, no <code>psql</code>, lembrando de fazer.</td><td>Um comando, que sabe o que já rodou.</td></tr>
+      <tr><td>Banco novo</td><td>Roda o arquivo inteiro.</td><td>Roda tudo em ordem.</td></tr>
+      <tr><td>Banco existente</td><td><strong>Não serve</strong> — recriar apagaria dados.</td><td>Roda só o que falta.</td></tr>
+      <tr><td>Histórico</td><td>Só o <code>git log</code> do arquivo.</td><td>Cada mudança é um arquivo datado, com o motivo no nome.</td></tr>
+      <tr><td>Reversão</td><td>Manual.</td><td>Um <code>down</code> por migration.</td></tr>
+    </tbody>
+  </table>
+  <p>A diferença que resolve o problema da seção 1 é a linha "banco existente". <code>CREATE TABLE IF NOT EXISTS</code> não ajuda quando a tabela existe mas está desatualizada — e é exatamente esse o caso toda vez que você adiciona uma coluna.</p>
+
+  <h2 id="ferramenta">3. Escolhendo a ferramenta</h2>
+  <table>
+    <thead><tr><th></th><th><code>node-pg-migrate</code> <span class="badge badge-ok">escolhido</span></th><th><code>knex</code></th></tr></thead>
+    <tbody>
+      <tr><td>O que é</td><td>Só migrations, específico pra Postgres.</td><td>Query builder completo que <em>também</em> faz migrations.</td></tr>
+      <tr><td>Impacto no projeto</td><td>Uma dependência de desenvolvimento e uma pasta.</td><td>Traz um jeito novo de escrever query junto — e o projeto já escreve SQL direto desde a parte 4.</td></tr>
+      <tr><td>SQL específico do Postgres</td><td>Nativo: <code>pgm.sql()</code> aceita qualquer coisa.</td><td>Possível, mas contra a corrente da biblioteca (que abstrai vários bancos).</td></tr>
+    </tbody>
+  </table>
+  <p>O critério é o mesmo da parte 12 (Zod x Joi): a ferramenta certa é a que resolve o problema que você tem sem trazer opinião sobre o resto. Precisamos de migrations, não de um jeito novo de consultar o banco — ainda mais depois da parte 13, onde o SQL cru com <code>FOR UPDATE</code> é justamente o que faz o projeto funcionar.</p>
+
+  <h2 id="instalando">4. Instalando e configurando</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span> na raiz do projeto. Aqui é <code>--save-dev</code>: a ferramenta roda no seu terminal e no deploy, nunca dentro da API:</p>
+  </div>
+  <pre><code>npm install --save-dev node-pg-migrate</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">package.json</span> — na seção <code>"scripts"</code>, junto do <code>dev</code> e do <code>lint</code> que já existem:</p>
+  </div>
+  <pre><code>"scripts": {
+  "dev": "nodemon index.js",
+  "lint": "eslint .",
+<span class="ln-add">  "migrate": "node-pg-migrate",
+  "migrate:up": "node-pg-migrate up",
+  "migrate:down": "node-pg-migrate down"</span>
+}</code></pre>
+  <p>A ferramenta lê a variável de ambiente <code>DATABASE_URL</code> — a mesma que o <code>db/pool.js</code> usa desde a parte 4, já no seu <code>.env</code>. Só falta carregá-la: o <code>index.js</code> chama <code>require('dotenv').config()</code>, mas o comando de migration não passa pelo <code>index.js</code>.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">.node-pg-migraterc</span> — arquivo de configuração na raiz, em JSON. Ele diz onde ficam as migrations e manda carregar o <code>.env</code>:</p>
+  </div>
+  <pre><code>{
+  "migrations-dir": "migrations",
+  "envPath": ".env"
+}</code></pre>
+  <div class="callout">
+    <p>Se preferir não criar o arquivo de configuração, dá pra passar tudo na linha de comando: <code>node-pg-migrate up -m migrations --envPath .env</code>. O arquivo existe pra você não precisar lembrar disso toda vez — e pra que o comando seja idêntico na sua máquina e no servidor.</p>
+  </div>
+
+  <h2 id="pgmigrations">5. A tabela pgmigrations</h2>
+  <p>Na primeira execução, a ferramenta cria uma tabela no seu banco:</p>
+  <pre><code>          name          |           run_on
+------------------------+----------------------------
+ 1700000000000_baseline | 2026-08-14 10:32:11.284
+ 1700000000001_indice   | 2026-08-14 10:32:11.301</code></pre>
+  <p>É só isso: o nome de cada migration já aplicada e quando. Ao rodar <code>up</code>, a ferramenta lista os arquivos da pasta, compara com essa tabela, e executa em ordem os que não estão lá.</p>
+  <div class="rule">
+    <span class="tag">Por que o controle mora no banco, e não num arquivo</span>
+    <p>Porque a pergunta que ele responde é "este <strong>banco</strong> está atualizado?", e cada banco tem uma resposta diferente: o seu de desenvolvimento, o de testes, o de produção. Um arquivo no repositório responderia "o código está atualizado", que é outra pergunta — a que o <code>git</code> já responde.</p>
+    <p>É o mesmo raciocínio do refresh token da parte 8: o estado que precisa sobreviver a restart e ser compartilhado entre instâncias mora no único lugar que os dois lados enxergam.</p>
+  </div>
+
+  <h2 id="baseline">6. Baseline: começar com o banco já existente</h2>
+  <p>Aqui está a parte que confunde. Seu banco já tem as cinco tabelas, com dados. Se a primeira migration for "criar tudo", ela vai falhar no seu banco (as tabelas existem) — mas precisa funcionar num banco vazio, senão ninguém consegue montar o projeto do zero.</p>
+  <p>A saída é uma migration <strong>baseline</strong>: ela representa todo o estado atual, escrita de forma que rodar num banco que já está assim seja inofensivo. O <code>schema.sql</code> já usa <code>CREATE TABLE IF NOT EXISTS</code> desde a parte 3, o que faz metade do trabalho — falta incluir o que foi adicionado por <code>ALTER TABLE</code> depois.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span> para gerar o arquivo com o nome e o timestamp corretos. A ferramenta cria o arquivo vazio; o conteúdo é o próximo passo:</p>
+  </div>
+  <pre><code>npm run migrate create baseline</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> o arquivo recém-criado em <span class="file">migrations/&lt;timestamp&gt;_baseline.js</span> — apague o conteúdo gerado e cole este. É o schema completo, agora incluindo as colunas que as partes 7, 8 e 10 adicionaram por <code>ALTER TABLE</code>:</p>
+  </div>
+  <pre><code>export const up = (pgm) => {
+  pgm.sql(`
+    CREATE TABLE IF NOT EXISTS instrutores (
+      id SERIAL PRIMARY KEY,
+      nome VARCHAR(120) NOT NULL,
+      especialidade VARCHAR(80) NOT NULL,
+      email VARCHAR(160) UNIQUE,
+      senha_hash VARCHAR(60),
+      papel VARCHAR(10) NOT NULL DEFAULT 'instrutor'
+        CHECK (papel IN ('instrutor', 'admin'))
+    );
+
+    CREATE TABLE IF NOT EXISTS alunos (
+      id SERIAL PRIMARY KEY,
+      nome VARCHAR(120) NOT NULL,
+      email VARCHAR(160) NOT NULL UNIQUE,
+      data_nascimento DATE NOT NULL,
+      senha_hash VARCHAR(60),
+      criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS aulas (
+      id SERIAL PRIMARY KEY,
+      nome VARCHAR(120) NOT NULL,
+      instrutor_id INTEGER NOT NULL REFERENCES instrutores(id) ON DELETE RESTRICT,
+      dia_semana VARCHAR(10) NOT NULL
+        CHECK (dia_semana IN ('segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado', 'domingo')),
+      hora_inicio TIME NOT NULL,
+      duracao_minutos INTEGER NOT NULL CHECK (duracao_minutos > 0),
+      capacidade_maxima INTEGER NOT NULL CHECK (capacidade_maxima > 0)
+    );
+
+    CREATE TABLE IF NOT EXISTS matriculas (
+      id SERIAL PRIMARY KEY,
+      aluno_id INTEGER NOT NULL REFERENCES alunos(id) ON DELETE CASCADE,
+      aula_id INTEGER NOT NULL REFERENCES aulas(id) ON DELETE CASCADE,
+      status VARCHAR(10) NOT NULL DEFAULT 'confirmada'
+        CHECK (status IN ('confirmada', 'cancelada')),
+      criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS matriculas_aluno_aula_confirmada_idx
+      ON matriculas (aluno_id, aula_id)
+      WHERE status = 'confirmada';
+
+    CREATE TABLE IF NOT EXISTS refresh_tokens (
+      id SERIAL PRIMARY KEY,
+      aluno_id INTEGER REFERENCES alunos(id) ON DELETE CASCADE,
+      instrutor_id INTEGER REFERENCES instrutores(id) ON DELETE CASCADE,
+      CHECK ((aluno_id IS NOT NULL)::int + (instrutor_id IS NOT NULL)::int = 1),
+      token_hash CHAR(64) NOT NULL UNIQUE,
+      expira_em TIMESTAMP NOT NULL,
+      revogado_em TIMESTAMP,
+      criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS refresh_tokens_aluno_id_idx
+      ON refresh_tokens (aluno_id);
+  `);
+};
+
+export const down = () => {
+  throw new Error('A migration baseline não é reversível.');
+};</code></pre>
+  <div class="warn">
+    <p><strong>O baseline precisa refletir o banco, não o <code>schema.sql</code>.</strong> Como a seção 1 mostrou, os dois divergiram. Copiar o <code>schema.sql</code> como está congelaria a mentira: quem montasse o projeto do zero continuaria sem <code>email</code> em <code>instrutores</code>. As três colunas estão incluídas acima justamente por isso — e a seção 7 mostra como conferir se sobrou alguma diferença no seu banco.</p>
+  </div>
+  <div class="rule">
+    <span class="tag">Por que o arquivo usa "export const" num projeto CommonJS</span>
+    <p>O projeto inteiro usa <code>require</code>/<code>module.exports</code>, e o arquivo gerado pela ferramenta usa <code>export const</code>. Não é engano nem exige mudar o <code>package.json</code>: o <code>node-pg-migrate</code> carrega os arquivos de migration por conta própria, com suporte aos dois formatos. Mantenha como veio.</p>
+  </div>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span> — no seu banco de desenvolvimento, que já tem tudo, isso não deve alterar nada. É o teste de que o baseline é seguro:</p>
+  </div>
+  <pre><code>npm run migrate:up</code></pre>
+  <pre><code>&gt; Migrating files:
+&gt; - 1786660195208_baseline
+### MIGRATION 1786660195208_baseline (UP) ###
+...
+Migrations complete!</code></pre>
+  <p>As tabelas já existiam, então cada <code>CREATE TABLE IF NOT EXISTS</code> foi ignorado pelo Postgres. O que mudou foi só a linha nova em <code>pgmigrations</code>, marcando o ponto de partida. Daqui pra frente, toda alteração é uma migration.</p>
+
+  <h2 id="conferindo">7. Conferindo o baseline contra o banco</h2>
+  <p>O baseline foi escrito à mão, então vale conferir se ele descreve mesmo o seu banco. O <code>pg_dump</code> mostra o estado real:</p>
+  <pre><code>docker compose exec -T db pg_dump -U postgres -d estudo \
+  --schema-only --no-owner --no-privileges &gt; /tmp/banco-real.sql
+
+grep -A 10 "CREATE TABLE public.instrutores" /tmp/banco-real.sql</code></pre>
+  <p>Compare coluna por coluna com o baseline. O <code>pg_dump</code> escreve de um jeito mais verboso (separa <code>SEQUENCE</code> de <code>CREATE TABLE</code>, nomeia todas as constraints), então não espere texto idêntico — o que importa é que não falte nem sobre nada.</p>
+  <p>O teste definitivo é montar um banco do zero e comparar. A seção 14 faz isso.</p>
+  <div class="callout">
+    <p>Você pode se perguntar por que não usar direto a saída do <code>pg_dump</code> como baseline. É uma opção legítima e mais garantida — a desvantagem é legibilidade: o dump traz <code>ALTER TABLE ONLY ... ADD CONSTRAINT</code> separado de cada tabela, nomes gerados automaticamente e detalhes de sequência. Como este é material de estudo, o baseline legível vale mais. Em projeto grande, com dezenas de tabelas, use o dump.</p>
+  </div>
+
+  <h2 id="primeira-migration">8. A primeira migration de verdade</h2>
+  <p>Tem uma pendência real esperando desde a parte 10: <code>refresh_tokens</code> ganhou a coluna <code>instrutor_id</code>, mas só <code>aluno_id</code> tem índice. Toda vez que um instrutor renova o token, o Postgres varre a tabela.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span> — o nome vira parte do arquivo, então descreva a mudança, não o arquivo:</p>
+  </div>
+  <pre><code>npm run migrate create indice-refresh-tokens-instrutor</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> o arquivo criado em <span class="file">migrations/&lt;timestamp&gt;_indice-refresh-tokens-instrutor.js</span> — substitua o conteúdo gerado:</p>
+  </div>
+  <pre><code>export const up = (pgm) => {
+  pgm.createIndex('refresh_tokens', 'instrutor_id', {
+    name: 'refresh_tokens_instrutor_id_idx',
+    ifNotExists: true,
+  });
+};
+
+export const down = (pgm) => {
+  pgm.dropIndex('refresh_tokens', 'instrutor_id', {
+    name: 'refresh_tokens_instrutor_id_idx',
+    ifExists: true,
+  });
+};</code></pre>
+  <pre><code>npm run migrate:up
+
+### MIGRATION ..._indice-refresh-tokens-instrutor (UP) ###
+CREATE INDEX IF NOT EXISTS "refresh_tokens_instrutor_id_idx"
+  ON "refresh_tokens" ("instrutor_id");
+Migrations complete!</code></pre>
+  <p>Repare no que aconteceu: a ferramenta rodou <strong>só</strong> a migration nova. O baseline já estava na tabela de controle e foi pulado sem você precisar dizer nada. É essa a diferença prática do <code>schema.sql</code>.</p>
+
+  <h2 id="api-vs-sql">9. API do pgm ou SQL cru?</h2>
+  <p>As duas migrations acima usaram estilos diferentes de propósito. <code>pgm</code> tem métodos para as operações comuns (<code>createTable</code>, <code>addColumns</code>, <code>createIndex</code>, <code>addConstraint</code>...), e tem o <code>pgm.sql()</code>, que aceita qualquer SQL.</p>
+  <table>
+    <thead><tr><th>Use a API do <code>pgm</code></th><th>Use <code>pgm.sql()</code></th></tr></thead>
+    <tbody>
+      <tr><td>Operações comuns — coluna, índice, tabela simples.</td><td>SQL específico do Postgres que a API não cobre bem.</td></tr>
+      <tr><td>Ganha o <code>down</code> quase de graça, com a operação inversa óbvia.</td><td>Quando escrever em SQL é mais claro do que traduzir pra chamadas.</td></tr>
+      <tr><td>Ex: <code>pgm.addColumns('alunos', { telefone: { type: 'varchar(20)' } })</code></td><td>Ex: o <code>CHECK</code> do arco exclusivo da parte 10, ou o índice único parcial da parte 3.</td></tr>
+    </tbody>
+  </table>
+  <p>Não existe resposta certa universal. A regra prática: comece pela API, e caia pro <code>pgm.sql()</code> quando perceber que está lutando contra ela. Migration que ninguém entende é pior do que migration verbosa.</p>
+
+  <h2 id="down">10. down: reversibilidade e quando abrir mão</h2>
+  <p>Todo arquivo tem <code>up</code> e <code>down</code>. O <code>down</code> desfaz — e <code>npm run migrate:down</code> reverte a última aplicada.</p>
+  <pre><code>npm run migrate:down
+
+### MIGRATION ..._indice-refresh-tokens-instrutor (DOWN) ###
+DROP INDEX IF EXISTS "refresh_tokens_instrutor_id_idx";
+Migrations complete!</code></pre>
+  <p>A linha some de <code>pgmigrations</code>, e um <code>up</code> aplica de novo. Útil quando você percebe um erro na migration que acabou de rodar em desenvolvimento.</p>
+  <div class="warn">
+    <p><strong>Nem todo <code>down</code> é possível, e fingir que é dá pior resultado.</strong> Uma migration que apaga uma coluna não consegue trazer os dados de volta — o <code>down</code> recria a coluna vazia, que <em>parece</em> reversão e não é. O baseline desta parte declara isso explicitamente com um <code>throw</code>: melhor falhar com mensagem clara do que executar um <code>DROP TABLE</code> em cascata achando que está desfazendo algo.</p>
+    <p>Em produção, <code>down</code> quase nunca é a resposta certa. Corrigir um erro com uma migration <strong>nova</strong> preserva o histórico e não depende de o <code>down</code> ter sido escrito com cuidado. <code>down</code> é ferramenta de desenvolvimento.</p>
+  </div>
+
+  <h2 id="fluxo">11. O fluxo do dia a dia</h2>
+  <div class="step">
+    <div class="step-number">1</div>
+    <h3>Precisou mudar o banco</h3>
+    <p><code>npm run migrate create nome-que-descreve</code>. Nunca mais abra o <code>psql</code> pra <code>ALTER TABLE</code>.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">2</div>
+    <h3>Escreva up e down</h3>
+    <p>Uma mudança lógica por arquivo. Duas alterações não relacionadas são duas migrations.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">3</div>
+    <h3>Rode e teste</h3>
+    <p><code>npm run migrate:up</code>, verifique, e — se der — <code>migrate:down</code> seguido de <code>up</code> pra confirmar que o <code>down</code> funciona. É o único momento em que testar o <code>down</code> é barato.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">4</div>
+    <h3>Commit junto do código</h3>
+    <p>A migration e o código que depende dela vão no <strong>mesmo</strong> commit. Separados, existe um commit no meio da história em que o código espera uma coluna que não existe.</p>
+  </div>
+  <div class="rule">
+    <span class="tag">E o db/schema.sql, morre?</span>
+    <p>Ele perde a função de fonte da verdade — quem monta o banco agora é <code>migrate:up</code>. Duas saídas defensáveis: apagar o arquivo (o baseline o substitui) ou mantê-lo como documentação legível do estado atual, com um comentário no topo dizendo que ele é gerado/informativo e que as migrations mandam.</p>
+    <p>Recomendo <strong>apagar</strong>. Um arquivo que não é executado por ninguém volta a divergir na primeira semana — é exatamente a história da seção 1. Se quiser uma visão do schema atual, <code>pg_dump --schema-only</code> gera na hora, sempre correta.</p>
+  </div>
+
+  <h2 id="deploy">12. Migrations e deploy</h2>
+  <p>Até aqui, migration é conveniência. No deploy, vira necessidade: ninguém abre <code>psql</code> em servidor de produção pra rodar <code>ALTER TABLE</code> na mão — é lento, não tem registro e cada ambiente vira um floco de neve.</p>
+  <p>O padrão é rodar as migrations <strong>antes</strong> de subir a versão nova do código, como passo do processo de deploy:</p>
+  <pre><code>npm ci
+npm run migrate:up
+npm start</code></pre>
+  <p>A ordem importa e tem uma consequência que vale entender desde já: por um instante, o banco novo convive com o código velho. Se a migration <em>remove</em> uma coluna que o código atual ainda lê, esse instante vira erro. Por isso mudanças destrutivas costumam ser feitas em duas etapas, separadas por um deploy: primeiro para de usar, depois remove.</p>
+  <div class="callout">
+    <p>Isso conecta com o que a parte de produção vai tratar. Por ora, o que importa é a decisão de arquitetura: <strong>migration não roda dentro do <code>index.js</code></strong>. Se a API aplicasse migrations ao subir, duas instâncias subindo ao mesmo tempo tentariam migrar em paralelo — e um erro de migration derrubaria a aplicação inteira em vez de falhar num passo isolado do deploy.</p>
+  </div>
+
+  <h2 id="nao-fazer">13. O que não fazer numa migration</h2>
+  <ul>
+    <li><strong>Editar migration já aplicada.</strong> A tabela de controle guarda o <em>nome</em>: alterar o conteúdo não faz ela rodar de novo no seu banco, mas roda a versão nova em quem ainda não aplicou. Os bancos divergem em silêncio. Migration aplicada é imutável; correção é migration nova.</li>
+    <li><strong>Migração de dados pesada junto com mudança de estrutura.</strong> Um <code>UPDATE</code> em milhões de linhas dentro da migration segura lock e trava o deploy. Estrutura na migration, dados num script separado que dá pra rodar e acompanhar.</li>
+    <li><strong>Depender do código da aplicação.</strong> Nada de importar seus repositories ou services dentro de uma migration. Ela precisa rodar igual daqui a dois anos, quando aquele arquivo tiver mudado de forma — ou deixado de existir.</li>
+    <li><strong>Uma migration gigante com dez mudanças.</strong> Se uma falhar no meio, você fica num estado difícil de descrever. Uma mudança lógica por arquivo.</li>
+    <li><strong>Renomear arquivo de migration.</strong> O nome é a chave na tabela de controle. Renomear faz a ferramenta achar que é migration nova e tentar aplicar de novo.</li>
+  </ul>
+
+  <h2 id="testando">14. Testando</h2>
+  <p>O teste que importa é o que a seção 1 descreveu: alguém clona o projeto e monta o banco do zero. Dá pra simular sem tocar no seu banco de desenvolvimento, criando um banco descartável:</p>
+  <pre><code># cria um banco vazio só pro teste
+docker compose exec -T db psql -U postgres -c "CREATE DATABASE estudo_teste_migrations;"
+
+# roda as migrations apontando pra ele (variável só nesta linha)
+DATABASE_URL="postgresql://postgres:SUA_SENHA@localhost:5432/estudo_teste_migrations" \
+  npx node-pg-migrate up</code></pre>
+  <pre><code># as tabelas nasceram?
+docker compose exec -T db psql -U postgres -d estudo_teste_migrations -c "\dt"
+
+# e as colunas que faltavam no schema.sql?
+docker compose exec -T db psql -U postgres -d estudo_teste_migrations -c \
+  "SELECT column_name FROM information_schema.columns
+   WHERE table_name = 'instrutores' ORDER BY ordinal_position;"
+# deve listar 6: id, nome, especialidade, email, senha_hash, papel</code></pre>
+  <p>Se as seis colunas aparecerem, o baseline está correto e o problema da seção 1 acabou. Confirme também o índice novo e o arco exclusivo da parte 10:</p>
+  <pre><code>docker compose exec -T db psql -U postgres -d estudo_teste_migrations \
+  -c "SELECT indexname FROM pg_indexes WHERE tablename = 'refresh_tokens';" \
+  -c "SELECT conname FROM pg_constraint
+      WHERE conrelid = 'refresh_tokens'::regclass AND contype = 'c';"</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-del">Apagar</span> o banco de teste quando terminar — ele não serve pra mais nada:</p>
+  </div>
+  <pre><code>docker compose exec -T db psql -U postgres -c "DROP DATABASE estudo_teste_migrations;"</code></pre>
+  <p>Por fim, o teste de que a API continua funcionando: rode <code>npm run dev</code> e repita um fluxo qualquer das partes anteriores — login, matrícula, refresh. O banco de desenvolvimento não mudou nada além de ganhar o índice novo e a tabela <code>pgmigrations</code>.</p>
+
+  <h2 id="erros-comuns">15. Erros comuns</h2>
+  <ol>
+    <li><strong>Rodar <code>ALTER TABLE</code> no <code>psql</code> "só dessa vez"</strong> — o banco fica à frente das migrations, e a próxima migration que mexer naquela tabela falha em ambiente limpo e funciona no seu. Todo o problema da seção 1, de volta com outro nome.</li>
+    <li><strong>Editar uma migration já aplicada</strong> — divergência silenciosa entre bancos (seção 13).</li>
+    <li><strong>Esquecer o <code>envPath</code></strong> — a ferramenta não passa pelo <code>index.js</code>, então não carrega o <code>.env</code> sozinha. O sintoma é erro de conexão dizendo que faltou <code>DATABASE_URL</code>.</li>
+    <li><strong>Commitar o código sem a migration</strong> — o colega puxa, roda, e a API quebra procurando uma coluna que não existe no banco dele.</li>
+    <li><strong>Baseline copiado do <code>schema.sql</code> desatualizado</strong> — congela a divergência em vez de corrigi-la, e o teste da seção 14 passa a "provar" um banco errado.</li>
+    <li><strong><code>down</code> que finge reverter</strong> — recriar coluna apagada não traz os dados. Ou escreva um <code>down</code> honesto, ou declare que não há (seção 10).</li>
+    <li><strong>Rodar migration dentro da aplicação</strong> — duas instâncias subindo migram em paralelo (seção 12).</li>
+    <li><strong>Migration que importa código do projeto</strong> — ela precisa continuar rodando quando aquele arquivo mudar.</li>
+  </ol>
+
+  <h2 id="proximos-passos">16. O que vem a seguir</h2>
+  <p>O banco agora tem histórico versionado, e montar o projeto do zero virou um comando. Ainda dentro da categoria <strong>banco e dados</strong>, faltam duas mudanças — e as duas são, agora, migrations:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Limpeza dos refresh tokens expirados</strong> — a tabela só cresce: cada login e cada renovação deixam uma linha revogada pra sempre. Entra um <code>DELETE</code> periódico dos expirados há mais de X dias, e a discussão de onde esse tipo de rotina roda (script agendado, <code>cron</code>, ou dentro da aplicação — e por que a última opção é a pior).</li>
+      <li><strong>Soft-delete de instrutor</strong> — anotado desde a parte 6 e mais urgente depois da parte 10: hoje <code>DELETE /instrutores/:id</code> apaga a linha, e com ela o <code>email</code> e o <code>senha_hash</code>. Além disso, o <code>ON DELETE RESTRICT</code> de <code>aulas</code> impede apagar quem já deu aula — então na prática a rota falha com <code>409</code> pra qualquer instrutor real. Marcar como inativo resolve os dois problemas e preserva o histórico.</li>
+    </ol>
+  </div>
+  <p>Depois disso: <strong>qualidade</strong> (Jest + supertest, CI — e migrations facilitam, porque a suíte pode montar um banco limpo com um comando) → <strong>contrato da API</strong> (paginação, OpenAPI) → <strong>produção</strong> (logging, health check, Dockerfile, deploy com HTTPS, e o passo de migration no processo de deploy da seção 12).</p>
+
+  <footer class="closing">
+    <p>O momento que vale observar é o teste da seção 14: um banco vazio virando o schema completo com um comando, incluindo as três colunas que estavam faltando no <code>schema.sql</code>. Volta com dúvidas, principalmente se o <code>migrate:up</code> reclamar de algo que você jurava já existir — quase sempre é o baseline descrevendo um banco diferente do seu, e o <code>pg_dump</code> da seção 7 responde qual dos dois está certo.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

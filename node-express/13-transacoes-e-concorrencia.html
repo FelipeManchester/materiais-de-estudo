@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Transações e concorrência</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="12-validacao-e-erros.html">&larr; 12. Validação e erros de domínio</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#reproduzindo">1. A corrida, reproduzida</a></li>
+    <li><a href="#por-que">2. Por que acontece, com Node single-thread</a></li>
+    <li><a href="#o-que-nao-resolve">3. O que não resolve</a></li>
+    <li><a href="#transacao">4. Transação: tudo ou nada</a></li>
+    <li><a href="#isolamento">5. Transação não basta: isolamento e lock</a></li>
+    <li><a href="#client-dedicado">6. Transação no driver pg: o client dedicado</a></li>
+    <li><a href="#helper">7. O helper executarEmTransacao</a></li>
+    <li><a href="#executor">8. Repositories que aceitam um executor</a></li>
+    <li><a href="#for-update">9. SELECT ... FOR UPDATE</a></li>
+    <li><a href="#reescrevendo">10. Reescrevendo POST /:id/matriculas</a></li>
+    <li><a href="#refresh">11. A outra corrida: rotação de refresh</a></li>
+    <li><a href="#testando">12. Testando a corrida</a></li>
+    <li><a href="#custo">13. O custo do lock, e deadlock</a></li>
+    <li><a href="#erros-comuns">14. Erros comuns</a></li>
+    <li><a href="#proximos-passos">15. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="14-migrations.html">14. Migrations &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 13</div>
+  <h1>Transações e concorrência</h1>
+  <p class="subtitle">Duas condições de corrida estão anotadas nesta trilha desde que apareceram — uma na parte 6, outra na parte 8 — sempre com a mesma nota de rodapé: "fica registrado, não resolvido aqui". Esta parte resolve as duas. Antes disso, vamos ver a primeira acontecer de verdade.</p>
+
+  <h2 id="reproduzindo">1. A corrida, reproduzida</h2>
+  <p>A Regra 1 do projeto (parte 2) diz que uma aula não pode ter mais matrículas confirmadas que a capacidade. O código que garante isso está no <code>POST /aulas/:id/matriculas</code> desde a parte 6:</p>
+  <pre><code>const totalConfirmadas = await matriculasRepository.contarConfirmadas(aula.id);
+
+if (totalConfirmadas &gt;= aula.capacidade_maxima) {
+  throw new ErroDeDominio('Aula sem vagas disponíveis', 409);
+}
+
+// ...INSERT da matrícula</code></pre>
+  <p>Leia isso com olhos de "e se duas requisições chegarem no mesmo instante?". Entre o <code>contarConfirmadas</code> e o <code>INSERT</code> existe uma janela — pequena, mas existe. Se duas requisições contarem <strong>antes</strong> de qualquer uma inserir, as duas veem a mesma vaga livre e as duas inserem.</p>
+  <p>Isso não é teoria. Numa aula com <code>capacidade_maxima: 1</code>, disparando 8 matrículas simultâneas com <code>Promise.all</code> (o script está na seção 12), três rodadas seguidas contra o código atual do projeto:</p>
+  <pre><code>rodada 1 | aula 12 (1 vaga) | 201s: 1 | status: 201,409,409,409,409,409,409,409
+rodada 2 | aula 13 (1 vaga) | 201s: 2 | status: 201,201,409,409,409,409,409,409
+rodada 3 | aula 14 (1 vaga) | 201s: 8 | status: 201,201,201,201,201,201,201,201</code></pre>
+  <div class="warn">
+    <p>Repare nas três rodadas: <strong>a mesma requisição, contra o mesmo código, deu três resultados diferentes</strong>. Na primeira a regra funcionou. Na segunda entraram dois alunos numa vaga. Na terceira, oito — a aula lotou 8× acima do limite e a API respondeu <code>201</code> pra todo mundo, sem nenhum erro em log nenhum.</p>
+    <p>É essa a assinatura de bug de concorrência: ele não falha quando você testa, falha quando tem gente usando. E o dano fica no banco, não no log.</p>
+  </div>
+  <p>A mesma janela existe na rotação de refresh token da parte 8, com outro sintoma: dois pedidos simultâneos com o mesmo refresh token são aceitos, cada um recebe um par novo, e a detecção de reuso — que existe justamente pra pegar token duplicado — não dispara.</p>
+
+  <h2 id="por-que">2. Por que acontece, com Node single-thread</h2>
+  <p>A objeção natural é: "Node é single-thread, não roda duas coisas ao mesmo tempo — como duas requisições se intercalam?". A resposta está no <code>await</code>.</p>
+  <p>Single-thread significa que só uma linha de JavaScript executa por vez. Não significa que uma requisição roda inteira antes da próxima começar. Toda vez que o código encontra um <code>await</code> — que aqui é sempre uma ida ao Postgres, que leva milissegundos — a função <strong>devolve o controle ao event loop</strong>, que aproveita pra avançar outra requisição que estava esperando.</p>
+  <pre><code>Requisição A                          Requisição B
+──────────────────────────────────────────────────────────────
+contarConfirmadas() ─┐
+                     │ (await: A cede o controle)
+                     └──────────────▶ contarConfirmadas() ─┐
+   ◀── volta 0                                             │
+                                                           └── volta 0
+if (0 >= 1) → false                    if (0 >= 1) → false
+INSERT ✅                              INSERT ✅
+──────────────────────────────────────────────────────────────
+                                       duas matrículas, uma vaga</code></pre>
+  <p>Nenhum paralelismo de verdade aconteceu, e mesmo assim as duas leram <code>0</code>. O padrão tem nome — <strong>read-check-write</strong>, ou <em>TOCTOU</em> (<em>time of check to time of use</em>): você verifica uma condição e age sobre ela em dois momentos diferentes, sem nada garantir que a condição continua valendo no meio do caminho.</p>
+  <div class="callout">
+    <p>Rodar várias instâncias da API (o normal em produção, e o que a parte 9 mencionou ao falar do rate limit em memória) só piora: aí existe paralelismo real, em processos diferentes, e nenhuma solução escrita em JavaScript — variável de controle, fila em memória, <code>mutex</code> de biblioteca — alcança as outras instâncias. A única coisa que os dois processos compartilham é <strong>o banco</strong>. Por isso a solução tem que estar lá.</p>
+  </div>
+
+  <h2 id="o-que-nao-resolve">3. O que não resolve</h2>
+  <table>
+    <thead><tr><th>Tentativa</th><th>Por que não resolve</th></tr></thead>
+    <tbody>
+      <tr><td>Aproximar o <code>if</code> do <code>INSERT</code></td><td>Diminui a janela, não elimina. Bug que acontece "menos vezes" continua acontecendo — e fica mais difícil de reproduzir.</td></tr>
+      <tr><td>Contar de novo depois de inserir e desfazer se passou</td><td>Duas requisições podem detectar o excesso ao mesmo tempo e desfazer as duas, deixando a vaga vazia. Trocou um bug por outro.</td></tr>
+      <tr><td>Uma variável ou fila em memória no Node</td><td>Morre no primeiro <code>node index.js</code> extra. Não sobrevive a duas instâncias nem a um restart.</td></tr>
+      <tr><td>Confiar no <code>UNIQUE</code> da parte 3</td><td>Aquele índice único parcial resolve a <strong>Regra 2</strong> (o mesmo aluno duas vezes na mesma aula) e resolve bem — é por isso que o <code>23505</code> é tratado na rota. Mas capacidade não é unicidade: oito alunos <em>diferentes</em> na mesma aula não violam índice nenhum.</td></tr>
+    </tbody>
+  </table>
+  <p>Repare no padrão: a Regra 2 nunca teve corrida porque a garantia estava <strong>no banco</strong>, expressa como constraint. A Regra 1 tem corrida porque a garantia está no JavaScript. A solução é levar a Regra 1 pro mesmo lugar.</p>
+
+  <h2 id="transacao">4. Transação: tudo ou nada</h2>
+  <p>Uma <strong>transação</strong> agrupa várias operações SQL num bloco que o banco trata como uma unidade:</p>
+  <pre><code>BEGIN;
+  -- várias queries aqui
+COMMIT;   -- confirma tudo de uma vez
+-- ou
+ROLLBACK; -- desfaz tudo, como se nada tivesse acontecido</code></pre>
+  <p>É o "A" de ACID, <strong>atomicidade</strong>: ou todas as operações valem, ou nenhuma vale. Não existe meio-termo, nem se o processo Node morrer no meio — nesse caso o Postgres percebe a conexão cair e faz <code>ROLLBACK</code> sozinho.</p>
+  <p>Isso resolve uma família de problemas que o projeto ainda não tem, mas vai ter: "inserir a matrícula <em>e</em> debitar um crédito do aluno", onde deixar a primeira acontecer sem a segunda corrompe os dados. Guarde essa aplicação — não é a de agora.</p>
+
+  <h2 id="isolamento">5. Transação não basta: isolamento e lock</h2>
+  <p>Aqui está o detalhe que engana muita gente: <strong>envolver o código atual num <code>BEGIN/COMMIT</code> não conserta a corrida</strong>. Atomicidade garante que as operações de <em>uma</em> transação valem juntas; ela não diz nada sobre o que <em>outra</em> transação vê no meio do caminho. Isso é o "I" de ACID, <strong>isolamento</strong>, e ele tem níveis:</p>
+  <table>
+    <thead><tr><th>Nível</th><th>O que garante</th><th>Resolve nossa corrida?</th></tr></thead>
+    <tbody>
+      <tr><td><code>READ COMMITTED</code><br><span class="badge badge-warn">padrão do Postgres</span></td><td>Você só enxerga dados já confirmados por outras transações. Cada query dentro da transação vê um retrato novo do banco.</td><td><span class="badge badge-err">Não</span> — as duas contam antes de qualquer <code>COMMIT</code>, e as duas veem zero.</td></tr>
+      <tr><td><code>REPEATABLE READ</code></td><td>Todas as queries da transação veem o mesmo retrato, tirado no início.</td><td><span class="badge badge-err">Não</span> — piora, inclusive: as duas continuam vendo zero até o fim.</td></tr>
+      <tr><td><code>SERIALIZABLE</code></td><td>O resultado é garantidamente equivalente a executar as transações em alguma ordem sequencial.</td><td><span class="badge badge-ok">Sim</span> — mas o Postgres implementa isso abortando uma das transações com erro <code>40001</code>, e aí <strong>você</strong> tem que reexecutá-la.</td></tr>
+    </tbody>
+  </table>
+  <p>Existe um caminho mais direto que subir o nível de isolamento: pedir explicitamente um <strong>lock</strong> na linha que interessa. É o <code>SELECT ... FOR UPDATE</code> da seção 9 — quem chega primeiro trava a linha da aula, e a segunda requisição fica esperando na porta até a primeira terminar. Quando ela entra, já enxerga a matrícula que a outra criou.</p>
+  <div class="rule">
+    <span class="tag">Por que não SERIALIZABLE</span>
+    <p>É a solução mais elegante conceitualmente — você declara "quero que isso se comporte como se fosse sequencial" e o banco resolve. O custo é que <code>40001</code> não é opcional: sem um laço de retry em volta de <strong>toda</strong> transação serializável, o usuário recebe erro em vez do resultado. Isso é uma estrutura a mais pra manter, e o ganho aqui não justifica: temos uma linha específica (a aula) que dá pra travar diretamente. <code>SERIALIZABLE</code> brilha quando a condição envolve várias tabelas e não dá pra apontar a linha.</p>
+  </div>
+
+  <h2 id="client-dedicado">6. Transação no driver pg: o client dedicado</h2>
+  <p>Uma armadilha antes do código. O projeto usa <code>pool.query(...)</code> desde a parte 4, e o pool escolhe uma conexão livre <strong>a cada chamada</strong>. Isso quebra transação:</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Errado</h4>
+      <pre><code>await pool.query('BEGIN');
+await pool.query('SELECT ...');
+await pool.query('COMMIT');</code></pre>
+      <p>Cada linha pode sair por uma conexão diferente. O <code>BEGIN</code> abre transação numa conexão, o <code>SELECT</code> roda fora dela, e o <code>COMMIT</code> confirma uma transação vazia numa terceira.</p>
+    </div>
+    <div class="good">
+      <h4>Certo</h4>
+      <pre><code>const client = await pool.connect();
+await client.query('BEGIN');
+await client.query('SELECT ...');
+await client.query('COMMIT');
+client.release();</code></pre>
+      <p><code>pool.connect()</code> reserva <strong>uma</strong> conexão pra você. Todas as queries saem por ela, e o <code>release()</code> devolve pro pool.</p>
+    </div>
+  </div>
+  <div class="warn">
+    <p>O <code>release()</code> é obrigatório e precisa acontecer <strong>mesmo quando dá erro</strong>. Conexão que não volta pro pool fica presa pra sempre; o pool do <code>pg</code> tem 10 conexões por padrão, então dez erros mal tratados e a API inteira trava esperando conexão que nunca vem. É o vazamento clássico desse padrão, e o motivo de a próxima seção existir: quem esquece o <code>release</code> não é você, é o <code>try/catch</code> escrito às pressas.</p>
+  </div>
+
+  <h2 id="helper">7. O helper executarEmTransacao</h2>
+  <p>Em vez de repetir <code>connect</code>/<code>BEGIN</code>/<code>COMMIT</code>/<code>ROLLBACK</code>/<code>release</code> em toda rota que precisar, isso vira uma função só, que recebe o que fazer dentro da transação.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">db/transacao.js</span> — ao lado do <code>pool.js</code> que existe desde a parte 4:</p>
+  </div>
+  <pre><code>const pool = require('./pool');
+
+async function executarEmTransacao(callback) {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const resultado = await callback(client);
+
+    await client.query('COMMIT');
+
+    return resultado;
+  } catch (erro) {
+    await client.query('ROLLBACK');
+    throw erro;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = executarEmTransacao;</code></pre>
+  <p>A estrutura garante as três coisas que não podem falhar:</p>
+  <ul>
+    <li><strong>Sucesso</strong> — <code>COMMIT</code> e devolve o que o callback devolveu.</li>
+    <li><strong>Erro</strong> — <code>ROLLBACK</code> e <strong>relança</strong>. O <code>throw erro</code> é essencial: sem ele, a rota acharia que deu tudo certo. Como ele relança, um <code>ErroDeDominio</code> lançado lá dentro (parte 12) chega intacto no error handler e vira o status correto.</li>
+    <li><strong>Sempre</strong> — <code>finally</code> devolve a conexão, tenha dado erro ou não.</li>
+  </ul>
+  <div class="callout">
+    <p>O callback recebe o <code>client</code> como argumento. Quem estiver dentro da transação precisa usar <strong>esse</strong> client em todas as queries — usar <code>pool</code> por engano roda a query fora da transação, e o bug fica invisível até alguém testar concorrência. A seção 8 é sobre fazer os repositories aceitarem esse client.</p>
+  </div>
+
+  <h2 id="executor">8. Repositories que aceitam um executor</h2>
+  <p>Hoje toda função de repository chama <code>pool.query(...)</code> diretamente. Pra funcionar dentro de uma transação, ela precisa aceitar o client — e continuar funcionando fora dela, nas dezenas de chamadas existentes.</p>
+  <p>A saída é um parâmetro com valor padrão. <code>pool</code> e <code>client</code> têm a mesma interface (<code>.query</code>), então quem chama escolhe:</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">repositories/matriculasRepository.js</span> — nas funções <code>contarConfirmadas</code> e <code>criar</code>, adicione o parâmetro e troque <code>pool.query</code> por <code>executor.query</code>. As outras funções do arquivo ficam como estão:</p>
+  </div>
+  <pre><code><span class="ln-del">async function contarConfirmadas(aula_id) {
+  const resultado = await pool.query(</span>
+<span class="ln-add">async function contarConfirmadas(aula_id, executor = pool) {
+  const resultado = await executor.query(</span>
+<span class="ln-ctx">    /* sql */ `SELECT COUNT(*)::int AS total
+               FROM matriculas
+               WHERE aula_id = $1 AND status = 'confirmada'`,
+    [aula_id],
+  );
+  return resultado.rows[0].total;
+}</span>
+
+<span class="ln-del">async function criar({ aluno_id, aula_id }) {
+  const resultado = await pool.query(</span>
+<span class="ln-add">async function criar({ aluno_id, aula_id }, executor = pool) {
+  const resultado = await executor.query(</span>
+<span class="ln-ctx">    /* sql */ `INSERT INTO matriculas (aluno_id, aula_id)
+               VALUES ($1, $2)
+               RETURNING *`,
+    [aluno_id, aula_id],
+  );
+  return resultado.rows[0];
+}</span></code></pre>
+  <p>O <code>= pool</code> é o que mantém todo o código antigo funcionando: quem chamava <code>contarConfirmadas(3)</code> continua chamando igual e continua usando o pool. Quem chamar <code>contarConfirmadas(3, client)</code> roda dentro da transação. Nenhuma outra rota precisa mudar.</p>
+
+  <h2 id="for-update">9. SELECT ... FOR UPDATE</h2>
+  <p>Agora a peça central. <code>FOR UPDATE</code> no fim de um <code>SELECT</code> diz ao Postgres: "trave estas linhas até o fim da minha transação". Outra transação que tentar travar a mesma linha <strong>espera</strong>.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Adicionar</span> <span class="file">repositories/aulasRepository.js</span> — uma função nova, depois de <code>buscarPorId</code>, e inclua o nome no <code>module.exports</code> do fim do arquivo:</p>
+  </div>
+  <pre><code><span class="ln-add">// Igual a buscarPorId, mas trava a linha até o fim da transação.
+// Só faz sentido dentro de executarEmTransacao — por isso o executor
+// é obrigatório aqui, sem valor padrão.
+async function buscarPorIdBloqueando(id, executor) {
+  const query = 'SELECT * FROM aulas WHERE id = $1 FOR UPDATE';
+
+  const resultado = await executor.query(query, [id]);
+  return resultado.rows[0];
+}</span>
+
+<span class="ln-del">module.exports = {
+  listar,
+  buscarPorId,</span>
+<span class="ln-add">module.exports = {
+  listar,
+  buscarPorId,
+  buscarPorIdBloqueando,</span>
+<span class="ln-ctx">  existeConflito,
+  criar,
+  atualizar,
+  remover,
+};</span></code></pre>
+  <p>Repare que o <code>executor</code> aqui <strong>não</strong> tem valor padrão, diferente da seção 8. É intencional: <code>FOR UPDATE</code> fora de uma transação trava a linha e destrava imediatamente, no fim da própria query — ou seja, não protege nada e ainda dá a impressão de proteger. Exigir o parâmetro faz o esquecimento virar erro na hora (<code>Cannot read properties of undefined</code>) em vez de um bug silencioso.</p>
+  <div class="rule">
+    <span class="tag">Travamos a aula, mas contamos matrículas. Funciona?</span>
+    <p>Funciona, e o motivo é a combinação: o lock está na linha da <strong>aula</strong>, e todas as requisições que querem matricular naquela aula passam por essa mesma linha. Ela vira o ponto de serialização — só uma requisição por vez atravessa o trecho "contar e inserir" daquela aula específica. Matrículas em <em>outras</em> aulas seguem em paralelo normalmente, porque travam linhas diferentes.</p>
+    <p>Travar a linha da aula em vez de todas as linhas de matrícula também é o que mantém o lock barato: uma linha, não uma tabela.</p>
+  </div>
+
+  <h2 id="reescrevendo">10. Reescrevendo POST /:id/matriculas</h2>
+  <p>Com as peças no lugar, a rota muda de forma. Ela tem hoje um <code>try/catch</code> para o código <code>23505</code> (parte 6) e agora ganha a transação em volta da parte crítica.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — no topo, adicione o import do helper junto dos outros:</p>
+  </div>
+  <pre><code><span class="ln-ctx">const ErroDeDominio = require('../errors/ErroDeDominio');</span>
+<span class="ln-add">const executarEmTransacao = require('../db/transacao');</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — o handler de <code>POST /:id/matriculas</code>. A assinatura e os middlewares <strong>não mudam</strong>; o corpo inteiro é substituído. Note que <code>next</code> deixa de ser usado (o Express 5 encaminha a rejeição sozinho), e o <code>404</code> vira <code>ErroDeDominio</code> pra poder ser lançado de dentro da transação:</p>
+  </div>
+  <pre><code><span class="ln-ctx">router.post(
+  '/:id/matriculas',
+  autenticar,
+  autorizar('aluno'),
+  validar({ params: idParamSchema }),</span>
+<span class="ln-del">  async (req, res, next) => {
+    const aula = await aulasRepository.buscarPorId(req.params.id);
+
+    if (!aula) {
+      return res.status(404).json({ erro: 'Aula não encontrada' });
+    }
+
+    const totalConfirmadas = await matriculasRepository.contarConfirmadas(
+      aula.id,
+    );
+
+    if (totalConfirmadas >= aula.capacidade_maxima) {
+      throw new ErroDeDominio('Aula sem vagas disponíveis', 409);
+    }
+
+    try {
+      const matriculaCriada = await matriculasRepository.criar({
+        aluno_id: req.usuario.id,
+        aula_id: aula.id,
+      });
+
+      res
+        .status(201)
+        .location(`/aulas/${aula.id}/matriculas/${matriculaCriada.id}`)
+        .json(matriculaCriada);
+    } catch (err) {
+      if (err.code === '23505') {
+        return res
+          .status(409)
+          .json({ erro: 'Aluno já matriculado nesta aula' });
+      }
+      next(err);
+    }
+  },
+);</span>
+<span class="ln-add">  async (req, res) => {
+    try {
+      const matriculaCriada = await executarEmTransacao(async (client) => {
+        const aula = await aulasRepository.buscarPorIdBloqueando(
+          req.params.id,
+          client,
+        );
+
+        if (!aula) {
+          throw new ErroDeDominio('Aula não encontrada', 404);
+        }
+
+        const totalConfirmadas = await matriculasRepository.contarConfirmadas(
+          aula.id,
+          client,
+        );
+
+        if (totalConfirmadas >= aula.capacidade_maxima) {
+          throw new ErroDeDominio('Aula sem vagas disponíveis', 409);
+        }
+
+        return matriculasRepository.criar(
+          { aluno_id: req.usuario.id, aula_id: aula.id },
+          client,
+        );
+      });
+
+      res
+        .status(201)
+        .location(`/aulas/${req.params.id}/matriculas/${matriculaCriada.id}`)
+        .json(matriculaCriada);
+    } catch (err) {
+      if (err.code === '23505') {
+        throw new ErroDeDominio('Aluno já matriculado nesta aula', 409);
+      }
+      throw err;
+    }
+  },
+);</span></code></pre>
+  <p>Quatro coisas mudaram, e cada uma tem um motivo:</p>
+  <table>
+    <thead><tr><th>Mudança</th><th>Motivo</th></tr></thead>
+    <tbody>
+      <tr><td><code>buscarPorIdBloqueando</code> no lugar de <code>buscarPorId</code></td><td>É o <code>FOR UPDATE</code> — a partir daqui, ninguém mais mexe nessa aula até o <code>COMMIT</code>.</td></tr>
+      <tr><td>Contagem e <code>INSERT</code> recebem <code>client</code></td><td>Sem isso, rodariam fora da transação e o lock não protegeria nada.</td></tr>
+      <tr><td><code>404</code> virou <code>throw</code></td><td>Dentro do callback não existe <code>return res</code> que interrompa a transação corretamente. Lançar faz o helper dar <code>ROLLBACK</code> e o error handler responder <code>404</code>.</td></tr>
+      <tr><td><code>next(err)</code> virou <code>throw err</code></td><td>O parâmetro <code>next</code> sumiu da assinatura. O Express 5 pega a rejeição do handler <code>async</code> e leva pro error handler igualmente (parte 9).</td></tr>
+    </tbody>
+  </table>
+  <div class="warn">
+    <p>O <code>try/catch</code> do <code>23505</code> fica <strong>fora</strong> do <code>executarEmTransacao</code>, não dentro. Se ficasse dentro, o <code>catch</code> engoliria o erro antes do helper — o <code>ROLLBACK</code> não aconteceria, e a transação ficaria aberta segurando o lock da aula até o timeout da conexão. Toda requisição de matrícula naquela aula ficaria pendurada esperando.</p>
+  </div>
+
+  <h2 id="refresh">11. A outra corrida: rotação de refresh</h2>
+  <p>A parte 8 anotou a segunda corrida: entre <code>buscarPorHash</code> e <code>revogar</code>, dois pedidos com o mesmo refresh token passam os dois. Essa não precisa de transação — dá pra resolver com <strong>uma query só</strong>.</p>
+  <p>O segredo é que a defesa já foi escrita, lá na parte 8, e está sendo ignorada. Olhe o <code>revogar</code>:</p>
+  <pre><code>UPDATE refresh_tokens
+SET revogado_em = NOW()
+WHERE id = $1 AND revogado_em IS NULL
+RETURNING *</code></pre>
+  <p>O <code>AND revogado_em IS NULL</code> faz o <code>UPDATE</code> ser a <strong>checagem</strong> e a <strong>ação</strong> ao mesmo tempo: o banco garante que uma linha só é atualizada uma vez, e o <code>RETURNING *</code> conta quem conseguiu. Duas requisições simultâneas: uma recebe a linha, a outra recebe <code>undefined</code>. Esse padrão chama-se <em>compare-and-set</em>, e é a forma mais barata de resolver corrida — sem <code>BEGIN</code>, sem lock explícito.</p>
+  <p>A rota só precisa <strong>olhar o retorno</strong>, que hoje ela descarta.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/auth.js</span> — em <code>router.post('/refresh', ...)</code>, a linha da revogação (logo depois do bloco que descobre o <code>dono</code>). Ela deixa de ser uma chamada solta e passa a decidir o rumo da requisição:</p>
+  </div>
+  <pre><code><span class="ln-ctx">  if (!dono) {
+    return res.status(401).json({ erro: 'Refresh token inválido' });
+  }</span>
+
+<span class="ln-del">  await refreshTokensRepository.revogar(registro.id);</span>
+<span class="ln-add">  const revogado = await refreshTokensRepository.revogar(registro.id);
+
+  if (!revogado) {
+    // Outra requisição revogou este mesmo token entre a busca e agora:
+    // ou é corrida de cliente, ou é reuso de token vazado (parte 8).
+    await refreshTokensRepository.revogarTodosDoDono({
+      aluno_id: registro.aluno_id,
+      instrutor_id: registro.instrutor_id,
+    });
+
+    return res.status(401).json({ erro: 'Refresh token inválido' });
+  }</span>
+
+<span class="ln-ctx">  const tokens = await emitirTokens(dono);
+  responderComTokens(res, tokens);</span></code></pre>
+  <div class="rule">
+    <span class="tag">Por que a resposta é a mesma do reuso</span>
+    <p>Do ponto de vista do servidor, "duas requisições legítimas simultâneas" e "atacante usando token roubado ao mesmo tempo que a vítima" são <strong>indistinguíveis</strong> — é literalmente a mesma sequência de eventos. Tratar como reuso e derrubar todas as sessões do dono é a escolha segura: no pior caso, um cliente com bug de retry duplicado obriga o usuário a logar de novo; a alternativa (ignorar) deixaria passar exatamente o ataque que a parte 8 veio detectar.</p>
+    <p>Se um cliente real estiver disparando refresh duplicado, o certo é consertar o cliente — que é justamente o que esse <code>401</code> vai te avisar.</p>
+  </div>
+
+  <h2 id="testando">12. Testando a corrida</h2>
+  <p><code>curl</code> em background não serve aqui: o custo de subir oito processos é maior que a janela da corrida, e as requisições acabam chegando espaçadas. É preciso disparar tudo de uma conexão só, em paralelo de verdade.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">testar-corrida.js</span> — na raiz do projeto. É um script de teste manual, não parte da API (a suíte automatizada vem na categoria "qualidade"):</p>
+  </div>
+  <pre><code>// Uso: node testar-corrida.js
+// Cria uma aula de 1 vaga e dispara N matrículas simultâneas nela.
+const BASE = 'http://localhost:3000';
+
+const ADMIN = { email: 'admin@studiofit.com', senha: 'senha_forte_do_admin' };
+const QUANTIDADE = 8;
+
+async function json(url, opcoes = {}) {
+  const resposta = await fetch(BASE + url, {
+    ...opcoes,
+    headers: { 'Content-Type': 'application/json', ...opcoes.headers },
+  });
+  return { status: resposta.status, corpo: await resposta.json().catch(() => null) };
+}
+
+async function main() {
+  const login = await json('/auth/instrutores/login', {
+    method: 'POST',
+    body: JSON.stringify(ADMIN),
+  });
+  const tokenAdmin = login.corpo.access_token;
+
+  if (!tokenAdmin) {
+    throw new Error(`login de admin falhou: ${JSON.stringify(login.corpo)}`);
+  }
+
+  const sufixo = Date.now();
+
+  // instrutor novo a cada execução: a aula de teste nunca conflita
+  // com a agenda de ninguém (Regra 3, parte 5)
+  const instrutor = await json('/instrutores', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tokenAdmin}` },
+    body: JSON.stringify({
+      nome: `Instrutor Corrida ${sufixo}`,
+      especialidade: 'testes',
+    }),
+  });
+
+  // um aluno por requisição — matrícula duplicada do mesmo aluno
+  // seria barrada pelo índice único, e não é isso que queremos testar
+  const tokens = [];
+
+  for (let i = 0; i &lt; QUANTIDADE; i++) {
+    const email = `corrida${i}_${sufixo}@example.com`;
+
+    await json('/alunos', {
+      method: 'POST',
+      body: JSON.stringify({
+        nome: `Corrida ${i}`,
+        email,
+        data_nascimento: '1990-01-01',
+        senha: 'senha123',
+      }),
+    });
+
+    const sessao = await json('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, senha: 'senha123' }),
+    });
+
+    tokens.push(sessao.corpo.access_token);
+  }
+
+  const aula = await json('/aulas', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tokenAdmin}` },
+    body: JSON.stringify({
+      nome: `Corrida ${sufixo}`,
+      instrutor_id: instrutor.corpo.id,
+      dia_semana: 'domingo',
+      hora_inicio: '23:59',
+      duracao_minutos: 1,
+      capacidade_maxima: 1,
+    }),
+  });
+
+  const aulaId = aula.corpo.id;
+
+  if (!aulaId) {
+    throw new Error(`criação da aula falhou: ${JSON.stringify(aula.corpo)}`);
+  }
+
+  const resultados = await Promise.all(
+    tokens.map((token) =>
+      json(`/aulas/${aulaId}/matriculas`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((r) => r.status),
+    ),
+  );
+
+  const criadas = resultados.filter((status) => status === 201).length;
+
+  console.log('aula', aulaId, '| capacidade 1 |', QUANTIDADE, 'simultâneas');
+  console.log('status:', resultados.join(', '));
+  console.log(criadas === 1 ? 'OK: exatamente 1 matrícula' : `FALHOU: ${criadas} matrículas`);
+}
+
+main();</code></pre>
+  <div class="warn">
+    <p>Esse script <strong>cria dados</strong> a cada execução — um instrutor, oito alunos e uma aula, sempre novos. Não rode contra banco que te importa, e lembre de limpar depois.</p>
+    <p>O instrutor novo a cada execução não é capricho: com um <code>instrutor_id</code> fixo, a segunda execução tentaria criar outra aula no mesmo dia e horário do mesmo instrutor, e a Regra 3 (conflito de agenda, parte 5) responderia <code>422</code>. A aula não seria criada, as oito matrículas iriam para <code>/aulas/undefined/matriculas</code>, e o script reportaria oito <code>400</code> — um resultado que parece bug de concorrência e não é. Os dois <code>throw</code> de checagem existem por isso: falhar com a mensagem certa em vez de seguir com dado inválido.</p>
+  </div>
+  <p>Rode <strong>antes</strong> de aplicar as mudanças desta parte, algumas vezes, pra ver a corrida acontecer — o resultado varia entre execuções, e é isso que torna esse bug traiçoeiro. Depois aplique tudo e rode de novo:</p>
+  <pre><code>node testar-corrida.js
+
+# antes (varia a cada execução):
+# status: 201, 201, 409, 409, 409, 409, 409, 409
+# FALHOU: 2 matrículas
+
+# depois (sempre igual):
+# status: 201, 409, 409, 409, 409, 409, 409, 409
+# OK: exatamente 1 matrícula</code></pre>
+  <p>E confirme no banco que a regra de negócio está intacta:</p>
+  <pre><code>docker compose exec -T db psql -U postgres -d estudo -c \
+  "SELECT aula_id, COUNT(*) AS confirmadas, MAX(a.capacidade_maxima) AS capacidade
+   FROM matriculas m JOIN aulas a ON a.id = m.aula_id
+   WHERE m.status = 'confirmada'
+   GROUP BY aula_id
+   HAVING COUNT(*) > MAX(a.capacidade_maxima);"
+# nenhuma linha = nenhuma aula acima da capacidade</code></pre>
+  <div class="callout">
+    <p>Essa query é útil além do teste: rodada em produção, ela responde "alguma aula estourou a capacidade?". Bug de concorrência não aparece em log — a única forma de descobrir que ele existiu é procurar o estrago nos dados.</p>
+  </div>
+
+  <h2 id="custo">13. O custo do lock, e deadlock</h2>
+  <p>Lock não é grátis. Enquanto uma transação segura a linha da aula, outras requisições <strong>para aquela mesma aula</strong> esperam. Isso é o objetivo, mas tem duas consequências que valem entender:</p>
+  <ul>
+    <li><strong>Transação curta é regra.</strong> Nada de chamada HTTP externa, envio de email ou processamento pesado entre o <code>BEGIN</code> e o <code>COMMIT</code> — cada milissegundo ali é fila pra todo mundo que quer aquela aula. Abra a transação o mais tarde possível e feche o quanto antes.</li>
+    <li><strong>Deadlock existe.</strong> Se a transação A trava a aula 1 e depois quer a aula 2, enquanto a B trava a aula 2 e depois quer a 1, as duas esperam pra sempre. O Postgres detecta isso sozinho, mata uma delas com erro <code>40P01</code> e deixa a outra seguir. A prevenção é sempre travar recursos <strong>na mesma ordem</strong> — por id crescente, por exemplo. Nosso caso trava uma linha só, então não há como formar o ciclo.</li>
+  </ul>
+  <p>Vale também saber que existe <code>FOR UPDATE NOWAIT</code> (falha na hora em vez de esperar) e <code>FOR UPDATE SKIP LOCKED</code> (pula as linhas travadas, muito usado pra fila de trabalho). Não precisamos de nenhum dos dois aqui, mas quando aparecer "fila de jobs no Postgres" numa discussão, é esse <code>SKIP LOCKED</code> que está por trás.</p>
+
+  <h2 id="erros-comuns">14. Erros comuns</h2>
+  <ol>
+    <li><strong>Usar <code>pool.query</code> dentro da transação</strong> — a query sai por outra conexão, fora do <code>BEGIN</code>, e o lock não protege nada. O código funciona nos testes e falha sob concorrência: o pior tipo de bug.</li>
+    <li><strong>Esquecer <code>client.release()</code></strong> — dez requisições com erro e o pool esgota. A API para de responder sem nenhum erro claro, só requisições penduradas.</li>
+    <li><strong>Capturar o erro dentro da transação e não relançar</strong> — sem <code>throw</code>, não há <code>ROLLBACK</code>, e a transação fica aberta segurando lock (seção 10).</li>
+    <li><strong><code>FOR UPDATE</code> fora de transação</strong> — o lock é liberado no fim da própria query. Parece protegido, não está.</li>
+    <li><strong>Achar que <code>BEGIN/COMMIT</code> sozinho resolve corrida</strong> — atomicidade não é isolamento (seção 5). Sem lock ou <code>SERIALIZABLE</code>, as duas transações continuam lendo o mesmo valor.</li>
+    <li><strong>Testar concorrência com <code>curl &amp;</code></strong> — o custo de subir processos espaça as requisições o bastante pra corrida não acontecer. Use <code>Promise.all</code> num processo só (seção 12).</li>
+    <li><strong>Concluir que "não reproduziu, então não existe"</strong> — a corrida da seção 1 falhou em reproduzir na primeira rodada e depois deixou passar oito matrículas na terceira. Ausência de falha num teste não é evidência de correção.</li>
+    <li><strong>Trabalho pesado dentro da transação</strong> — email, chamada externa, laço grande. Tudo isso vira fila pros outros (seção 13).</li>
+  </ol>
+
+  <h2 id="proximos-passos">15. O que vem a seguir</h2>
+  <p>A categoria <strong>corretude e robustez</strong> fecha aqui: entrada validada com resposta por campo (parte 12), erros de domínio com status próprio (parte 12), e as duas condições de corrida resolvidas — uma com lock explícito, outra com <em>compare-and-set</em>. As duas notas de rodapé que a trilha vinha carregando desde as partes 6 e 8 saíram do papel.</p>
+  <p>A próxima categoria é <strong>banco e dados</strong>, e ela junta tudo que hoje é feito na mão no <code>psql</code>:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Migrations</strong> — a próxima parte. O <code>ALTER TABLE</code> da parte 7 (<code>senha_hash</code>), o <code>CREATE TABLE</code> da parte 8 (<code>refresh_tokens</code>) e os três da parte 10 (login de instrutor e o arco exclusivo) foram todos digitados direto no banco, com o <code>db/schema.sql</code> atualizado depois, na lembrança. Uma ferramenta de migration (<code>node-pg-migrate</code>, <code>knex</code>) transforma cada alteração num arquivo versionado que roda sozinho, na ordem certa, uma vez só por ambiente — e isso deixa de ser conveniência e vira obrigação no deploy, porque ninguém abre <code>psql</code> em servidor de produção.</li>
+      <li><strong>Limpeza de refresh tokens</strong> — a tabela só cresce: cada login e cada renovação deixam uma linha revogada pra sempre.</li>
+      <li><strong>Soft-delete de instrutor</strong> — anotado desde a parte 6, e mais urgente depois da parte 10: hoje apagar um instrutor apaga as credenciais de login junto.</li>
+    </ol>
+  </div>
+  <p>Depois dela: <strong>qualidade</strong> (Jest + supertest, CI — e o script da seção 12 é candidato natural a virar um teste de verdade) → <strong>contrato da API</strong> (paginação, OpenAPI) → <strong>produção</strong> (logging, health check, Dockerfile, deploy com HTTPS).</p>
+
+  <footer class="closing">
+    <p>Ao testar, rode o <code>testar-corrida.js</code> várias vezes <strong>antes</strong> de mexer no código — ver o resultado mudar entre execuções é o que faz o conceito grudar. Depois de aplicar tudo, ele deve devolver "exatamente 1 matrícula" em toda execução, sem exceção. Volta com dúvidas, principalmente se alguma requisição de matrícula começar a ficar pendurada sem responder: isso é lock não liberado, e o suspeito é sempre o <code>catch</code> que engoliu o erro sem relançar.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>
