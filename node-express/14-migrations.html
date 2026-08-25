@@ -33,6 +33,7 @@
     <li><a href="#erros-comuns">15. Erros comuns</a></li>
     <li><a href="#proximos-passos">16. O que vem a seguir</a></li>
   </ol>
+  <a class="toc-next" href="15-soft-delete-e-limpeza.html">15. Soft-delete e limpeza &rarr;</a>
 </nav>
 
 <main>
@@ -225,7 +226,22 @@ export const down = () => {
   <div class="rule">
     <span class="tag">Por que o arquivo usa "export const" num projeto CommonJS</span>
     <p>O projeto inteiro usa <code>require</code>/<code>module.exports</code>, e o arquivo gerado pela ferramenta usa <code>export const</code>. Não é engano nem exige mudar o <code>package.json</code>: o <code>node-pg-migrate</code> carrega os arquivos de migration por conta própria, com suporte aos dois formatos. Mantenha como veio.</p>
+    <p>Quem <strong>não</strong> sabe disso é o ESLint. A configuração da parte 4 declara <code>sourceType: "commonjs"</code> para todo <code>.js</code>, então o <code>npm run lint</code> passa a falhar assim que a primeira migration existe:</p>
+    <pre><code>migrations/..._baseline.js
+  1:1  error  Parsing error: 'import' and 'export' may appear
+              only with 'sourceType: module'</code></pre>
   </div>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">eslint.config.mjs</span> — adicione um bloco depois da linha que define <code>sourceType: "commonjs"</code>. Configuração de ESLint é aplicada em cascata: o bloco mais específico vence para os arquivos que ele casa, e o resto do projeto continua CommonJS:</p>
+  </div>
+  <pre><code>export default defineConfig([
+<span class="ln-ctx">  { files: ["**/*.{js,mjs,cjs}"], plugins: { js }, extends: ["js/recommended"], languageOptions: { globals: globals.node } },
+  { files: ["**/*.js"], languageOptions: { sourceType: "commonjs" } },</span>
+<span class="ln-add">  // node-pg-migrate gera migrations em ESM (export const up/down) e as carrega
+  // por conta própria — o resto do projeto continua CommonJS.
+  { files: ["migrations/**/*.js"], languageOptions: { sourceType: "module" } },</span>
+<span class="ln-ctx">  { rules: { "no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }] } },
+]);</span></code></pre>
   <div class="edit-step">
     <p><span class="action action-new">Rodar</span> — no seu banco de desenvolvimento, que já tem tudo, isso não deve alterar nada. É o teste de que o baseline é seguro:</p>
   </div>

@@ -48,6 +48,11 @@ Trilha específica de stack (complementa a API REST, que é conceitual/independe
 12. [Validação e erros de domínio](node-express/12-validacao-e-erros.html) — schemas com Zod em vez de `if (!campo)`, middleware `validar` para body/params/query, resposta `400` com erro por campo, e uma classe de erro de domínio traduzida em HTTP num lugar só.
 13. [Transações e concorrência](node-express/13-transacoes-e-concorrencia.html) — a condição de corrida reproduzida de verdade, por que ela acontece com Node single-thread, `BEGIN`/`COMMIT` com client dedicado do pool, `SELECT ... FOR UPDATE` e *compare-and-set* na rotação de refresh.
 14. [Migrations](node-express/14-migrations.html) — o `schema.sql` que diverge do banco (com o diagnóstico real do projeto), `node-pg-migrate`, migration de baseline num banco que já existe, `up`/`down`, e migrations no deploy.
+15. [Soft-delete e limpeza](node-express/15-soft-delete-e-limpeza.html) — retenção dos refresh tokens (e por que apagar cedo demais fura a detecção de reuso), script agendado em vez de `setInterval`, e exclusão de instrutor que preserva o histórico.
+16. [Testes automatizados](node-express/16-testes-automatizados.html) — Jest + supertest contra banco de verdade, `app.js` separado do `index.js`, banco de teste recriado por execução via migrations, e a guarda que recusa rodar fora de um banco `_test`.
+17. [Integração contínua](node-express/17-integracao-continua.html) — GitHub Actions rodando lint e testes a cada push, Postgres como service container com health check, `npm ci` contra `npm install`, e branch protection como portão.
+18. [Paginação, filtro e ordenação](node-express/18-paginacao-filtro-ordenacao.html) — envelope com metadados de página, `LIMIT`/`OFFSET` com total via window function, por que ordenar por placeholder não ordena (e não avisa), e whitelist de colunas contra SQL injection.
+19. [Documentação com OpenAPI](node-express/19-documentacao-openapi.html) — spec derivada dos schemas Zod com `z.toJSONSchema`, `io: 'input'` para descrever a entrada, as 20 operações escritas em módulos de `paths`, Swagger UI servido em `/docs`, e o risco de a doc divergir do código.
 
 ## Estrutura do repositório
 
@@ -77,7 +82,12 @@ estudo/
     ├── 11-cookie-httponly.html
     ├── 12-validacao-e-erros.html
     ├── 13-transacoes-e-concorrencia.html
-    └── 14-migrations.html
+    ├── 14-migrations.html
+    ├── 15-soft-delete-e-limpeza.html
+    ├── 16-testes-automatizados.html
+    ├── 17-integracao-continua.html
+    ├── 18-paginacao-filtro-ordenacao.html
+    └── 19-documentacao-openapi.html
 ```
 
 Novas trilhas de estudo entram como novos diretórios na raiz, seguindo o mesmo padrão: arquivos HTML numerados em ordem de leitura.

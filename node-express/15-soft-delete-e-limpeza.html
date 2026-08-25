@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Soft-delete e limpeza</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="14-migrations.html">&larr; 14. Migrations</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#tabela-cresce">1. A tabela que só cresce</a></li>
+    <li><a href="#o-que-apagar">2. O que dá pra apagar (e a armadilha)</a></li>
+    <li><a href="#onde-roda">3. Onde uma rotina dessas roda</a></li>
+    <li><a href="#migration-indice">4. Migration: índice para a limpeza</a></li>
+    <li><a href="#repository-limpeza">5. Repository: removerExpirados</a></li>
+    <li><a href="#script">6. O script de limpeza</a></li>
+    <li><a href="#agendando">7. Agendando</a></li>
+    <li><a href="#delete-hoje">8. O que o DELETE de instrutor faz hoje</a></li>
+    <li><a href="#soft-delete">9. Soft-delete: a coluna ativo</a></li>
+    <li><a href="#delete-vira-update">10. DELETE vira UPDATE</a></li>
+    <li><a href="#onde-mais">11. Onde mais o "ativo" precisa aparecer</a></li>
+    <li><a href="#reativar">12. Reativar</a></li>
+    <li><a href="#risco">13. O risco do soft-delete</a></li>
+    <li><a href="#testando">14. Testando</a></li>
+    <li><a href="#erros-comuns">15. Erros comuns</a></li>
+    <li><a href="#proximos-passos">16. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="16-testes-automatizados.html">16. Testes automatizados &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 15</div>
+  <h1>Soft-delete e limpeza</h1>
+  <p class="subtitle">Duas pendências de dados fecham a categoria: uma tabela que cresce pra sempre e nunca é limpa, e uma rota de exclusão que apaga credenciais de login — quando consegue apagar alguma coisa. As duas viram migrations, agora que a parte 14 deu o mecanismo.</p>
+
+  <h2 id="tabela-cresce">1. A tabela que só cresce</h2>
+  <p>Desde a parte 8, cada login e cada renovação inserem uma linha em <code>refresh_tokens</code>. Nenhuma linha jamais sai. Rode no seu banco:</p>
+  <pre><code>docker compose exec -T db psql -U postgres -d estudo -c "
+SELECT COUNT(*) AS total,
+       COUNT(*) FILTER (WHERE revogado_em IS NOT NULL) AS revogados,
+       COUNT(*) FILTER (WHERE expira_em &lt; NOW()) AS expirados,
+       MIN(criado_em)::date AS mais_antigo
+FROM refresh_tokens;"</code></pre>
+  <p>Num projeto de estudo, com um punhado de usuários de teste e poucos dias de uso, o resultado costuma passar de cem linhas. Extrapole: um usuário ativo renova o token a cada 15 minutos enquanto usa o sistema, o que dá umas 30 linhas por dia de uso. Mil usuários assim são 30 mil linhas por dia — 11 milhões por ano, das quais 99,99% não servem pra nada.</p>
+  <div class="rule">
+    <span class="tag">Por que isso importa antes de virar problema</span>
+    <p>Tabela grande não é problema por ocupar disco — disco é barato. O custo aparece em outros lugares: <code>buscarPorHash</code> continua rápido porque usa o índice único, mas backup e restauração ficam lentos, o <code>VACUUM</code> do Postgres trabalha mais, e qualquer consulta analítica que alguém escreva sem índice varre milhões de linhas mortas.</p>
+    <p>É também um problema de <em>privacidade</em>: guardar registro de sessão de um usuário que saiu do sistema há dois anos é dado pessoal retido sem propósito. Legislações de proteção de dados tratam retenção indefinida como problema, não como neutralidade.</p>
+  </div>
+
+  <h2 id="o-que-apagar">2. O que dá pra apagar (e a armadilha)</h2>
+  <p>A resposta óbvia — "apaga tudo que está expirado ou revogado" — está errada, e o motivo conecta direto com a parte 8.</p>
+  <p>Lembre da detecção de reuso: quando um refresh token <strong>revogado</strong> é reapresentado, o servidor entende que a string vazou e derruba todas as sessões daquele dono. Isso só funciona porque a linha revogada <em>continua no banco</em>. Se ela tiver sido apagada, o mesmo ataque cai em outro caminho:</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Linha apagada</h4>
+      <p><code>buscarPorHash</code> não acha nada → <code>401</code> "Refresh token inválido" e nada mais acontece. O atacante continua com a sessão que roubou, e ninguém foi avisado.</p>
+    </div>
+    <div class="good">
+      <h4>Linha preservada</h4>
+      <p><code>buscarPorHash</code> acha a linha com <code>revogado_em</code> preenchido → todas as sessões do dono são revogadas. O ataque é interrompido.</p>
+    </div>
+  </div>
+  <div class="warn">
+    <p><strong>A regra que sai daí:</strong> a retenção precisa ser confortavelmente <strong>maior</strong> que a validade do refresh token. Com 7 dias de validade (parte 8), apagar linhas com 30 dias é seguro: qualquer token que ainda pudesse ser reapresentado por um atacante já expirou há mais de três semanas, e um token expirado é recusado antes mesmo de a detecção de reuso importar.</p>
+    <p>Apagar com 3 dias, por outro lado, abriria um buraco silencioso na defesa da parte 8 — sem nenhum erro, sem nenhum teste falhando.</p>
+  </div>
+  <p>O critério vai no <code>expira_em</code>, não no <code>criado_em</code>: é a data de expiração que diz quando o token deixou de ter qualquer utilidade.</p>
+  <pre><code>DELETE FROM refresh_tokens
+WHERE expira_em &lt; NOW() - INTERVAL '30 days';</code></pre>
+  <p>Note que isso pega tanto os revogados quanto os que simplesmente venceram sem uso — depois de 30 dias da expiração, a distinção não interessa mais.</p>
+
+  <h2 id="onde-roda">3. Onde uma rotina dessas roda</h2>
+  <p>Tendo o comando, falta decidir <em>quem</em> o executa periodicamente. Quatro opções, em ordem crescente de acerto:</p>
+  <table>
+    <thead><tr><th>Onde</th><th>Problema</th></tr></thead>
+    <tbody>
+      <tr><td><code>setInterval</code> dentro do <code>index.js</code></td><td><span class="badge badge-err">pior opção</span> Some no restart, e com duas instâncias da API os dois processos limpam ao mesmo tempo. Além disso, mistura responsabilidades: um erro na limpeza pode derrubar a API inteira.</td></tr>
+      <tr><td>Rota HTTP secreta chamada de fora</td><td>Vira um endpoint que precisa ser protegido, e alguém sempre acaba chamando pelo navegador. Se demorar, estoura timeout do proxy no meio do <code>DELETE</code>.</td></tr>
+      <tr><td><code>pg_cron</code> (agendador dentro do Postgres)</td><td>Ótimo, e mantém a lógica perto do dado — mas é uma extensão a instalar e configurar, e a regra de negócio some do repositório.</td></tr>
+      <tr><td><strong>Script separado + agendador do sistema</strong></td><td><span class="badge badge-ok">escolhido</span> Um arquivo que roda, faz o trabalho e termina. Testável na mão, versionado junto do código, e o agendamento é responsabilidade de quem opera (cron, systemd timer, CronJob do Kubernetes, agendador do provedor).</td></tr>
+    </tbody>
+  </table>
+  <p>É o mesmo raciocínio da parte 14 sobre migrations não rodarem dentro do <code>index.js</code>: <strong>tarefa que não é atender requisição não deve morar no processo que atende requisições</strong>.</p>
+
+  <h2 id="migration-indice">4. Migration: índice para a limpeza</h2>
+  <p>O <code>DELETE</code> da seção 2 filtra por <code>expira_em</code>, e não existe índice nessa coluna — o Postgres varreria a tabela inteira toda vez. Primeira migration da parte, seguindo o fluxo da 14.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span> na raiz do projeto:</p>
+  </div>
+  <pre><code>npm run migrate create indice-refresh-tokens-expira-em</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> o arquivo gerado em <span class="file">migrations/&lt;timestamp&gt;_indice-refresh-tokens-expira-em.js</span> — substitua o conteúdo:</p>
+  </div>
+  <pre><code>export const up = (pgm) => {
+  pgm.createIndex('refresh_tokens', 'expira_em', {
+    name: 'refresh_tokens_expira_em_idx',
+    ifNotExists: true,
+  });
+};
+
+export const down = (pgm) => {
+  pgm.dropIndex('refresh_tokens', 'expira_em', {
+    name: 'refresh_tokens_expira_em_idx',
+    ifExists: true,
+  });
+};</code></pre>
+  <pre><code>npm run migrate:up</code></pre>
+
+  <h2 id="repository-limpeza">5. Repository: removerExpirados</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Adicionar</span> <span class="file">repositories/refreshTokensRepository.js</span> — função nova antes do <code>module.exports</code>, e inclua o nome na exportação:</p>
+  </div>
+  <pre><code><span class="ln-add">async function removerExpirados(diasDeRetencao = 30) {
+  const query = /* sql */ `
+    DELETE FROM refresh_tokens
+    WHERE expira_em &lt; NOW() - ($1 || ' days')::interval
+  `;
+
+  const resultado = await pool.query(query, [diasDeRetencao]);
+  return resultado.rowCount;
+}</span>
+
+<span class="ln-del">module.exports = { criar, buscarPorHash, revogar, revogarTodosDoDono };</span>
+<span class="ln-add">module.exports = {
+  criar,
+  buscarPorHash,
+  revogar,
+  revogarTodosDoDono,
+  removerExpirados,
+};</span></code></pre>
+  <p>O detalhe estranho é o <code>($1 || ' days')::interval</code>. Seria natural escrever <code>NOW() - INTERVAL '$1 days'</code>, mas isso <strong>não funciona</strong>: dentro de uma string literal do SQL, <code>$1</code> é texto, não placeholder. Concatenar o número com <code>' days'</code> e converter para <code>interval</code> resolve mantendo a query parametrizada — nada de montar SQL com template string, que é exatamente o buraco de SQL injection que a parte 4 fechou.</p>
+  <p><code>resultado.rowCount</code> devolve quantas linhas foram apagadas, que é o que o script vai reportar.</p>
+  <div class="callout">
+    <p>Em tabela realmente grande (milhões de linhas), um <code>DELETE</code> único segura lock e transação por muito tempo — o mesmo problema que a parte 13 discutiu. A versão robusta apaga em lotes, num laço: <code>DELETE FROM refresh_tokens WHERE id IN (SELECT id FROM refresh_tokens WHERE expira_em &lt; ... LIMIT 1000)</code>, repetido até <code>rowCount</code> voltar zero. Não vamos precisar disso aqui, mas é a evolução natural quando a tabela crescer.</p>
+  </div>
+
+  <h2 id="script">6. O script de limpeza</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">scripts/limpar-tokens.js</span> — diretório novo. É um programa completo: carrega o <code>.env</code> sozinho (não passa pelo <code>index.js</code>), faz o trabalho e encerra:</p>
+  </div>
+  <pre><code>require('dotenv').config();
+
+const pool = require('../db/pool');
+const refreshTokensRepository = require('../repositories/refreshTokensRepository');
+
+const DIAS_DE_RETENCAO = Number(process.env.RETENCAO_TOKENS_DIAS || 30);
+
+async function main() {
+  const removidos =
+    await refreshTokensRepository.removerExpirados(DIAS_DE_RETENCAO);
+
+  console.log(
+    `[limpar-tokens] ${new Date().toISOString()} | retenção: ${DIAS_DE_RETENCAO} dias | removidos: ${removidos}`,
+  );
+}
+
+main()
+  .catch((erro) => {
+    console.error('[limpar-tokens] falhou:', erro.message);
+    process.exitCode = 1;
+  })
+  .finally(() => pool.end());</code></pre>
+  <p>Três detalhes que fazem diferença num script agendado:</p>
+  <ul>
+    <li><strong><code>pool.end()</code> no <code>finally</code>.</strong> Sem fechar o pool, o processo fica vivo esperando conexões ociosas e o <code>cron</code> acumula processos pendurados. Script termina; servidor é que fica de pé.</li>
+    <li><strong><code>process.exitCode = 1</code> em caso de erro.</strong> É assim que o agendador sabe que falhou — sem isso, o <code>cron</code> considera sucesso e você nunca fica sabendo.</li>
+    <li><strong>Log com data e número.</strong> A saída vai pro arquivo de log do agendador, e "removidos: 0" por semanas seguidas é sinal de que algo parou de funcionar.</li>
+  </ul>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">package.json</span> — mais um script, junto dos de migration:</p>
+  </div>
+  <pre><code>"scripts": {
+  "dev": "nodemon index.js",
+  "lint": "eslint .",
+  "migrate": "node-pg-migrate",
+  "migrate:up": "node-pg-migrate up",
+<span class="ln-del">  "migrate:down": "node-pg-migrate down"</span>
+<span class="ln-add">  "migrate:down": "node-pg-migrate down",
+  "limpar-tokens": "node scripts/limpar-tokens.js"</span>
+}</code></pre>
+
+  <h2 id="agendando">7. Agendando</h2>
+  <p>Rodando na mão, o script já funciona:</p>
+  <pre><code>npm run limpar-tokens
+# [limpar-tokens] 2026-08-14T03:00:00.000Z | retenção: 30 dias | removidos: 0</code></pre>
+  <p>Em produção, quem chama é o agendador do sistema. Com <code>cron</code>, uma linha no <code>crontab -e</code>:</p>
+  <pre><code>0 3 * * * cd /caminho/do/projeto &amp;&amp; /usr/bin/node scripts/limpar-tokens.js &gt;&gt; /var/log/limpar-tokens.log 2&gt;&amp;1</code></pre>
+  <table>
+    <thead><tr><th>Pedaço</th><th>O que faz</th></tr></thead>
+    <tbody>
+      <tr><td><code>0 3 * * *</code></td><td>Todo dia às 3h. Horário de baixo movimento, porque o <code>DELETE</code> compete por recursos com o uso normal.</td></tr>
+      <tr><td><code>cd /caminho &amp;&amp; ...</code></td><td>O <code>cron</code> roda a partir do diretório do usuário, não do projeto — sem o <code>cd</code>, o <code>require('../db/pool')</code> e o <code>.env</code> não são encontrados.</td></tr>
+      <tr><td><code>/usr/bin/node</code></td><td>Caminho absoluto. O <code>PATH</code> do <code>cron</code> é mínimo e frequentemente não inclui o Node — principalmente com <code>nvm</code>. Descubra o seu com <code>which node</code>.</td></tr>
+      <tr><td><code>&gt;&gt; log 2&gt;&amp;1</code></td><td>Guarda saída e erros. Sem isso, o <code>cron</code> tenta mandar email pro usuário local e a mensagem se perde.</td></tr>
+    </tbody>
+  </table>
+  <p>Em ambiente gerenciado, o formato muda mas a ideia é a mesma: <code>CronJob</code> no Kubernetes, <em>Scheduled Job</em> no Render/Railway, EventBridge + Lambda na AWS. O script continua igual — é essa a vantagem de ele não depender de onde roda.</p>
+
+  <h2 id="delete-hoje">8. O que o DELETE de instrutor faz hoje</h2>
+  <p>Segunda pendência, anotada desde a parte 6. Teste o comportamento atual com dois instrutores diferentes:</p>
+  <pre><code># instrutor SEM aulas
+curl -s -w "\n%{http_code}\n" -X DELETE http://localhost:3000/instrutores/ID_SEM_AULAS \
+  -H "Authorization: Bearer TOKEN_ADMIN"
+# 204 — a linha foi apagada
+
+# instrutor COM aulas
+curl -s -w "\n%{http_code}\n" -X DELETE http://localhost:3000/instrutores/ID_COM_AULAS \
+  -H "Authorization: Bearer TOKEN_ADMIN"
+# 409 "Não é possível remover: Existem aulas cadastradas com este instrutor"</code></pre>
+  <p>Os dois resultados são problemáticos, por motivos opostos:</p>
+  <table>
+    <thead><tr><th>Caso</th><th>O que acontece</th><th>Por que é ruim</th></tr></thead>
+    <tbody>
+      <tr><td>Instrutor <strong>com</strong> aulas</td><td><code>409</code>, nada é removido</td><td>O <code>ON DELETE RESTRICT</code> da parte 3 impede. Como todo instrutor real dá aula, a rota <strong>na prática não funciona</strong> pra ninguém que importa.</td></tr>
+      <tr><td>Instrutor <strong>sem</strong> aulas</td><td><code>204</code>, linha apagada</td><td>Vão junto o <code>email</code>, o <code>senha_hash</code> e o <code>papel</code> criados na parte 10 — e o <code>ON DELETE CASCADE</code> leva os <code>refresh_tokens</code> dele. Se esse instrutor for o único <code>admin</code>, você acabou de perder o acesso administrativo do sistema, sem confirmação nenhuma.</td></tr>
+    </tbody>
+  </table>
+  <p>E existe o problema histórico: um instrutor que deu 200 aulas ao longo de dois anos e saiu da academia não deveria <em>desaparecer</em>. As aulas dele aconteceram; a matrícula dos alunos naquelas aulas aconteceu. Apagar a linha destrói o histórico ou trava na <code>FK</code> — que é exatamente o dilema que o <code>409</code> expressa.</p>
+
+  <h2 id="soft-delete">9. Soft-delete: a coluna ativo</h2>
+  <p><strong>Soft-delete</strong> é marcar como removido em vez de apagar. A linha continua lá, com o histórico intacto, e a aplicação passa a tratá-la como inexistente nos lugares onde faz sentido.</p>
+  <p>O projeto já usa essa ideia desde a parte 6, sem esse nome: a Regra 4 diz que cancelar matrícula nunca é <code>DELETE</code> — é <code>status = 'cancelada'</code>. Aqui é o mesmo padrão, aplicado a instrutor.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span>:</p>
+  </div>
+  <pre><code>npm run migrate create adicionar-ativo-em-instrutores</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> o arquivo gerado em <span class="file">migrations/&lt;timestamp&gt;_adicionar-ativo-em-instrutores.js</span>:</p>
+  </div>
+  <pre><code>export const up = (pgm) => {
+  pgm.addColumns('instrutores', {
+    ativo: { type: 'boolean', notNull: true, default: true },
+  });
+};
+
+export const down = (pgm) => {
+  pgm.dropColumns('instrutores', ['ativo']);
+};</code></pre>
+  <p>O <code>default: true</code> é o que permite <code>notNull</code> numa tabela com dados: todo instrutor existente vira ativo na hora do <code>ALTER</code>. Mesma lógica do <code>papel</code> na parte 10.</p>
+  <pre><code>npm run migrate:up</code></pre>
+  <div class="rule">
+    <span class="tag">Booleano ou timestamp?</span>
+    <p>Muitos projetos usam <code>desativado_em TIMESTAMP</code> (nulo = ativo) em vez de <code>ativo BOOLEAN</code> — é o que a própria tabela <code>refresh_tokens</code> faz com <code>revogado_em</code>, pelo motivo explicado na parte 8: guardar <em>quando</em> não custa nada e ajuda a investigar depois.</p>
+    <p>Aqui o booleano é escolha deliberada porque o estado é <strong>reversível</strong>: instrutor pode ser reativado (seção 12), e <code>ativo = true</code> lê melhor do que "voltar <code>desativado_em</code> para <code>NULL</code>". Se você quiser as duas coisas, dá pra ter <code>ativo</code> e <code>desativado_em</code> juntos — só lembre que aí são dois campos que precisam concordar, e campo redundante é campo que uma hora diverge.</p>
+  </div>
+
+  <h2 id="delete-vira-update">10. DELETE vira UPDATE</h2>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">repositories/instrutoresRepository.js</span> — a função <code>remover</code> deixa de apagar. O nome fica, porque é o que a rota chama; o que muda é o SQL:</p>
+  </div>
+  <pre><code><span class="ln-del">async function remover(id) {
+  const query = 'DELETE FROM instrutores WHERE id = $1 RETURNING *';
+  const resultado = await pool.query(query, [id]);
+
+  return resultado.rows[0];
+}</span>
+<span class="ln-add">async function remover(id) {
+  const query = /* sql */ `
+    UPDATE instrutores
+    SET ativo = false
+    WHERE id = $1
+    RETURNING id, nome, especialidade, email, papel, ativo
+  `;
+  const resultado = await pool.query(query, [id]);
+
+  return resultado.rows[0];
+}</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/instrutores.js</span> — na rota <code>DELETE /:id</code>. O <code>try/catch</code> do código <code>23503</code> não tem mais função: sem <code>DELETE</code> de verdade, a <code>FK</code> de <code>aulas</code> nunca é violada. O handler fica assim:</p>
+  </div>
+  <pre><code><span class="ln-ctx">router.delete(
+  '/:id',
+  autenticar,
+  autorizar('admin'),
+  validar({ params: idParamSchema }),</span>
+<span class="ln-del">  async (req, res, next) => {
+    try {
+      const instrutorRemovido = await instrutoresRepository.remover(
+        req.params.id,
+      );
+
+      if (!instrutorRemovido) {
+        return res.status(404).json({ erro: 'Instrutor não encontrado' });
+      }
+
+      res.status(204).send();
+    } catch (err) {
+      if (err.code === '23503') {
+        return res.status(409).json({
+          erro: 'Não é possível remover: Existem aulas cadastradas com este instrutor',
+        });
+      }
+      next(err);
+    }
+  },
+);</span>
+<span class="ln-add">  async (req, res) => {
+    const instrutorRemovido = await instrutoresRepository.remover(
+      req.params.id,
+    );
+
+    if (!instrutorRemovido) {
+      return res.status(404).json({ erro: 'Instrutor não encontrado' });
+    }
+
+    res.status(204).send();
+  },
+);</span></code></pre>
+  <p>A rota que "na prática não funcionava pra ninguém que importa" (seção 8) passa a funcionar pra todo mundo — e o instrutor com 200 aulas some da listagem sem que uma única aula desapareça.</p>
+  <div class="callout">
+    <p>Repare que desativar duas vezes seguidas devolve <code>204</code> nas duas. O <code>UPDATE</code> encontra a linha e a marca de novo — idempotente, como o logout da parte 8. Se você quisesse recusar a segunda com <code>409</code>, bastaria <code>AND ativo = true</code> no <code>WHERE</code> e tratar o retorno vazio; a escolha aqui é a mesma de sempre: o resultado desejado já é verdade, então não é erro.</p>
+  </div>
+
+  <h2 id="onde-mais">11. Onde mais o "ativo" precisa aparecer</h2>
+  <p>Marcar a coluna é a parte fácil. A parte que erra é lembrar de <strong>todos</strong> os lugares que precisam respeitá-la. No projeto são três:</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">repositories/instrutoresRepository.js</span> — <code>listar</code> devolve só os ativos, e <code>buscarPorEmail</code> (usada no login, parte 10) recusa quem foi desativado:</p>
+  </div>
+  <pre><code>async function listar() {
+<span class="ln-del">  const query =
+    'SELECT id, nome, especialidade, papel FROM instrutores ORDER BY id';</span>
+<span class="ln-add">  const query = /* sql */ `
+    SELECT id, nome, especialidade, papel
+    FROM instrutores
+    WHERE ativo = true
+    ORDER BY id
+  `;</span>
+<span class="ln-ctx">  const resultado = await pool.query(query);
+
+  return resultado.rows;
+}</span>
+
+async function buscarPorEmail(email) {
+<span class="ln-del">  const query = 'SELECT * FROM instrutores WHERE email = $1';</span>
+<span class="ln-add">  const query = 'SELECT * FROM instrutores WHERE email = $1 AND ativo = true';</span>
+<span class="ln-ctx">  const resultado = await pool.query(query, [email]);
+
+  return resultado.rows[0];
+}</span></code></pre>
+  <p>Com isso, um instrutor desativado tentando logar recebe o mesmo <code>401</code> "email ou senha inválidos" de quem errou a senha — mensagem genérica, pelo motivo da parte 7: não contar pra ninguém quais contas existem.</p>
+  <div class="warn">
+    <p><strong><code>buscarPorId</code> continua sem filtro</strong>, de propósito. Ela é usada em dois lugares que precisam enxergar inativos: a rota <code>GET /instrutores/:id</code> (um admin consultando quem foi desativado) e o <code>/auth/refresh</code> da parte 10, que relê o papel do dono do token. Filtrar ali faria o refresh de um admin desativado devolver <code>401</code> genérico em vez do comportamento previsto — e, pior, esconderia a linha de quem tem legitimidade pra vê-la.</p>
+    <p>Essa é a decisão mais sutil desta parte: <strong>soft-delete não é "sumir de todo lugar", é "sumir de onde faz sentido"</strong>. Cada consulta precisa dessa decisão tomada explicitamente.</p>
+  </div>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/aulas.js</span> — na rota <code>POST /</code>, a checagem de existência do instrutor. Criar aula para instrutor desativado não pode ser permitido:</p>
+  </div>
+  <pre><code>    const instrutorExiste = await instrutorRepository.buscarPorId(instrutor_id);
+<span class="ln-del">    if (!instrutorExiste) {</span>
+<span class="ln-add">    if (!instrutorExiste || !instrutorExiste.ativo) {</span>
+      return res.status(422).json({
+        erro: 'instrutor_id não corresponde a nenhum instrutor existente',
+      });
+    }</code></pre>
+  <p>As aulas <em>antigas</em> do instrutor desativado continuam lá, com todas as matrículas — o que muda é que ninguém agenda aula nova pra ele.</p>
+
+  <h2 id="reativar">12. Reativar</h2>
+  <p>A vantagem do soft-delete só se realiza se der pra desfazer. Como <code>PATCH /instrutores/:id</code> já existe e já exige admin, basta permitir o campo.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">schemas/instrutorSchema.js</span> — adicione o campo no <code>criarInstrutorSchema</code>. O <code>atualizarInstrutorSchema</code> herda automaticamente, porque é o mesmo schema com <code>.partial()</code> (parte 12):</p>
+  </div>
+  <pre><code>const criarInstrutorSchema = z.strictObject({
+  nome: z.string().trim().min(2).max(120),
+  especialidade: z.string().trim().min(2).max(80),
+  email: z.email().max(160).optional(),
+  senha: z.string().min(8).max(72).optional(),
+  papel: z.enum(['instrutor', 'admin']).optional(),
+<span class="ln-add">  ativo: z.boolean().optional(),</span>
+});</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">repositories/instrutoresRepository.js</span> — a função <code>atualizar</code> precisa saber gravar o campo novo. Ela usa <code>COALESCE</code> pra manter o valor antigo quando o campo não vem:</p>
+  </div>
+  <pre><code><span class="ln-del">async function atualizar(id, { nome, especialidade }) {
+  const query = `
+    UPDATE instrutores
+    SET nome = COALESCE($1, nome),
+        especialidade = COALESCE($2, especialidade)
+    WHERE id = $3
+    RETURNING *
+  `;
+
+  const resultado = await pool.query(query, [nome, especialidade, id]);</span>
+<span class="ln-add">async function atualizar(id, { nome, especialidade, ativo }) {
+  const query = /* sql */ `
+    UPDATE instrutores
+    SET nome = COALESCE($1, nome),
+        especialidade = COALESCE($2, especialidade),
+        ativo = COALESCE($3, ativo)
+    WHERE id = $4
+    RETURNING id, nome, especialidade, email, papel, ativo
+  `;
+
+  const resultado = await pool.query(query, [
+    nome,
+    especialidade,
+    ativo ?? null,
+    id,
+  ]);</span>
+<span class="ln-ctx">
+  return resultado.rows[0];
+}</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/instrutores.js</span> — na rota <code>PATCH /:id</code>, passe o campo novo adiante:</p>
+  </div>
+  <pre><code><span class="ln-del">    const { nome, especialidade } = req.body;</span>
+<span class="ln-add">    const { nome, especialidade, ativo } = req.body;</span>
+
+    const instrutorAtualizado = await instrutoresRepository.atualizar(
+      req.params.id,
+      {
+        nome: nome ?? null,
+        especialidade: especialidade ?? null,
+<span class="ln-add">        ativo: ativo ?? null,</span>
+      },
+    );</code></pre>
+  <p>Reativar vira <code>PATCH /instrutores/12</code> com <code>{"ativo": true}</code>. E o <code>RETURNING</code> das duas funções lista colunas em vez de <code>*</code> pelo motivo da parte 10: <code>senha_hash</code> não sai do banco.</p>
+
+  <h2 id="risco">13. O risco do soft-delete</h2>
+  <p>Vale nomear o custo, porque ele é real e cresce com o projeto: <strong>a partir de agora, toda consulta nova a <code>instrutores</code> precisa decidir se filtra <code>ativo</code></strong>. Esquecer é fácil, e o bug é silencioso — um instrutor desativado reaparecendo num relatório meses depois.</p>
+  <table>
+    <thead><tr><th>Estratégia</th><th>Como funciona</th></tr></thead>
+    <tbody>
+      <tr><td>Disciplina <span class="badge badge-ok">nossa escolha</span></td><td>Cada query decide explicitamente. Simples e visível — com 5 consultas na tabela, dá pra revisar todas de uma vez.</td></tr>
+      <tr><td><code>VIEW</code> de ativos</td><td><code>CREATE VIEW instrutores_ativos AS SELECT * FROM instrutores WHERE ativo</code>, e o código consulta a view. O filtro deixa de ser esquecível, mas você passa a ter dois nomes pra mesma entidade.</td></tr>
+      <tr><td>Filtro automático no ORM</td><td>Ferramentas como Prisma e Sequelize têm escopo padrão. O projeto não usa ORM (parte 4), e o filtro invisível tem o problema inverso: um dia você precisa ver os inativos e não entende por que não aparecem.</td></tr>
+    </tbody>
+  </table>
+  <p>Há também o efeito colateral que a seção 11 já mostrou: o <code>UNIQUE</code> de <code>email</code> continua valendo para inativos. Um instrutor desativado com <code>paula@studiofit.com</code> impede cadastrar outro com o mesmo email — o que costuma ser o comportamento certo (é a mesma pessoa voltando, então reative), mas é bom saber que é assim antes de descobrir num <code>409</code> confuso.</p>
+
+  <h2 id="testando">14. Testando</h2>
+  <p>Comece pela limpeza. Como seus tokens têm poucos dias, <code>30</code> não apaga nada — é justamente a prova de que o critério funciona:</p>
+  <pre><code>npm run limpar-tokens
+# removidos: 0 — nenhum token expirou há mais de 30 dias
+
+# force a situação: retenção de 0 dias apaga tudo que já expirou
+RETENCAO_TOKENS_DIAS=0 npm run limpar-tokens
+# removidos: N — os expirados saíram
+
+# rode de novo: já não há mais nada
+RETENCAO_TOKENS_DIAS=0 npm run limpar-tokens
+# removidos: 0</code></pre>
+  <p>Confirme que os tokens <strong>válidos</strong> sobreviveram — se algum login parar de renovar, o critério está errado:</p>
+  <pre><code>docker compose exec -T db psql -U postgres -d estudo -c \
+  "SELECT COUNT(*) FILTER (WHERE revogado_em IS NULL AND expira_em &gt; NOW()) AS ainda_validos,
+          COUNT(*) AS total FROM refresh_tokens;"</code></pre>
+  <p>Agora o soft-delete, com um instrutor de teste criado pelo admin:</p>
+  <pre><code># cria um instrutor com login
+curl -s -X POST http://localhost:3000/instrutores \
+  -H "Content-Type: application/json" -H "Authorization: Bearer TOKEN_ADMIN" \
+  -d '{"nome":"Teste Soft Delete","especialidade":"testes","email":"softdelete@studiofit.com","senha":"senha123"}'
+# 201 — anote o id
+
+# ele aparece na listagem e consegue logar
+curl -s http://localhost:3000/instrutores | grep -c "Teste Soft Delete"   # 1
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:3000/auth/instrutores/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"softdelete@studiofit.com","senha":"senha123"}'            # 200
+
+# desativa
+curl -s -o /dev/null -w "%{http_code}\n" -X DELETE http://localhost:3000/instrutores/ID \
+  -H "Authorization: Bearer TOKEN_ADMIN"                                  # 204
+
+# sumiu da listagem e não loga mais
+curl -s http://localhost:3000/instrutores | grep -c "Teste Soft Delete"   # 0
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:3000/auth/instrutores/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"softdelete@studiofit.com","senha":"senha123"}'            # 401
+
+# mas a linha continua no banco
+docker compose exec -T db psql -U postgres -d estudo -c \
+  "SELECT id, nome, ativo FROM instrutores WHERE email = 'softdelete@studiofit.com';"
+# ativo = f
+
+# reativa
+curl -s -o /dev/null -w "%{http_code}\n" -X PATCH http://localhost:3000/instrutores/ID \
+  -H "Content-Type: application/json" -H "Authorization: Bearer TOKEN_ADMIN" \
+  -d '{"ativo":true}'                                                     # 200
+# e o login volta a funcionar</code></pre>
+  <p>O teste que resolve a pendência da parte 6 — desativar quem tem aulas, o caso que antes dava <code>409</code>:</p>
+  <pre><code># pegue um instrutor que tenha aulas
+curl -s -o /dev/null -w "%{http_code}\n" -X DELETE http://localhost:3000/instrutores/ID_COM_AULAS \
+  -H "Authorization: Bearer TOKEN_ADMIN"
+# 204 (antes: 409)
+
+# e as aulas dele continuam lá
+curl -s "http://localhost:3000/aulas?instrutor_id=ID_COM_AULAS" | head -c 200</code></pre>
+  <div class="warn">
+    <p>Faça esse teste com um instrutor de teste, não com o <code>Admin</code> — desativar o único admin tira o seu próprio acesso administrativo. Se acontecer, dá pra voltar pelo banco: <code>UPDATE instrutores SET ativo = true WHERE papel = 'admin';</code></p>
+  </div>
+
+  <h2 id="erros-comuns">15. Erros comuns</h2>
+  <ol>
+    <li><strong>Retenção menor que a validade do token</strong> — apaga linhas revogadas que ainda serviriam pra detectar reuso, furando em silêncio a defesa da parte 8 (seção 2).</li>
+    <li><strong>Limpar por <code>criado_em</code> em vez de <code>expira_em</code></strong> — um token criado há 40 dias pode ter sido renovado ontem. O critério é quando ele deixou de valer.</li>
+    <li><strong><code>setInterval</code> no <code>index.js</code></strong> — some no restart, duplica com duas instâncias, e um erro na limpeza derruba a API (seção 3).</li>
+    <li><strong>Esquecer <code>pool.end()</code> no script</strong> — o processo não termina, e o agendador vai acumulando processos vivos.</li>
+    <li><strong><code>INTERVAL '$1 days'</code></strong> — dentro da string literal, <code>$1</code> é texto, não parâmetro. Use <code>($1 || ' days')::interval</code> (seção 5).</li>
+    <li><strong>Soft-delete sem revisar as consultas existentes</strong> — a coluna sozinha não esconde ninguém. Cada <code>SELECT</code> precisa decidir (seção 11).</li>
+    <li><strong>Filtrar <code>ativo</code> em <code>buscarPorId</code></strong> — quebra o <code>/auth/refresh</code> e esconde a linha de quem tem direito de vê-la.</li>
+    <li><strong>Esquecer o caminho absoluto do Node no <code>cron</code></strong> — o <code>PATH</code> do cron é mínimo, e o erro só aparece no log que você provavelmente não configurou (seção 7).</li>
+    <li><strong>Desativar o único admin</strong> — sem rota de reativação acessível, sobra o <code>psql</code> (seção 14).</li>
+  </ol>
+
+  <h2 id="proximos-passos">16. O que vem a seguir</h2>
+  <p>A categoria <strong>banco e dados</strong> fecha aqui: migrations versionadas (parte 14), retenção com prazo definido, e exclusão que preserva histórico. Junto com as anteriores, todas as pendências que a trilha vinha anotando desde a parte 6 saíram do papel.</p>
+  <p>A próxima categoria é <strong>qualidade</strong>, e ela é o único item da lista que muda como você <em>trabalha</em>, não o que a API faz:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Testes automatizados</strong> — a próxima parte. Todo teste desta trilha foi manual, via <code>curl</code>, e a conta já está alta: o fluxo de refresh tem quatro caminhos, a matriz de papéis tem dez linhas, e existem quatro regras de negócio. Cada parte nova exige reconferir tudo na mão. Jest + supertest transformam isso num comando — e migrations tornam viável montar um banco limpo por execução.</li>
+      <li><strong>CI</strong> — os testes rodando sozinhos a cada push, no GitHub Actions. É o que impede que uma correção de segunda-feira quebre a autorização escrita há três semanas.</li>
+    </ol>
+  </div>
+  <p>Depois: <strong>contrato da API</strong> (paginação, filtro, ordenação e documentação OpenAPI) → <strong>produção</strong> (logging estruturado, health check, Dockerfile do app e deploy com HTTPS).</p>
+  <p>Fica registrado como dívida consciente: <code>GET /instrutores</code> agora esconde inativos de todo mundo, inclusive do admin. Uma listagem administrativa completa precisaria de um filtro na query (<code>?incluir_inativos=true</code>), e isso encaixa naturalmente na parte de paginação e filtros.</p>
+
+  <footer class="closing">
+    <p>Ao testar, o momento que fecha a história da trilha é desativar um instrutor com aulas e receber <code>204</code> — a mesma requisição que respondia <code>409</code> desde a parte 5, agora funcionando sem que nenhuma aula ou matrícula desapareça. Volta com dúvidas, principalmente se algum instrutor desativado continuar aparecendo em algum lugar: isso é uma consulta que ficou sem o filtro da seção 11.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

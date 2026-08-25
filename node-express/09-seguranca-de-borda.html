@@ -191,7 +191,8 @@ Retry-After: 841</code></pre>
     <p><strong>"Mas minha API só devolve JSON, não tem página."</strong> Verdade — CSP e <code>X-Frame-Options</code> não têm o que proteger numa resposta JSON consumida por um app. Ainda vale ligar: o custo é uma linha, e no dia em que a API servir <strong>qualquer</strong> HTML (a documentação Swagger da categoria "contrato", uma página de erro, um redirect), a proteção já está lá. Segurança que depende de alguém lembrar de ligar depois costuma não ser ligada.</p>
   </div>
   <div class="warn">
-    <p>Guarde este detalhe pra quando chegar no Swagger UI: o CSP padrão do helmet bloqueia scripts e estilos inline, que é exatamente do que a interface do Swagger precisa. Não é bug — é o CSP funcionando. A solução é afrouxar a política <strong>só na rota da documentação</strong>, nunca desligar o helmet inteiro por causa dela.</p>
+    <p>Guarde este detalhe pra quando servir uma página junto da API — a documentação Swagger da parte 19, por exemplo. Se ela depender de <code>&lt;script&gt;</code> inline ou carregar arquivo de outro domínio, o CSP padrão vai bloquear, e o sintoma é página em branco com um aviso no console do navegador. Não é bug: é o CSP funcionando.</p>
+    <p>Quando isso acontecer, a saída é afrouxar a política <strong>só naquela rota</strong> — <code>app.use('/docs', helmet({ contentSecurityPolicy: false }), ...)</code> —, nunca desligar o helmet inteiro por causa de uma página. (Adiantando: na versão atual do <code>swagger-ui-express</code> isso não é necessário, porque ela serve todos os arquivos do próprio domínio.)</p>
   </div>
 
   <h2 id="cors">8. CORS: o que é, e o que não é</h2>

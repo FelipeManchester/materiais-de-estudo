@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Paginação, filtro e ordenação</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="17-integracao-continua.html">&larr; 17. Integração contínua</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-problema">1. A tabela inteira na resposta</a></li>
+    <li><a href="#estrategias">2. Duas formas de paginar</a></li>
+    <li><a href="#envelope">3. Onde colocar o total</a></li>
+    <li><a href="#schema">4. O schema da query</a></li>
+    <li><a href="#ordenacao">5. Ordenação não pode ser parametrizada</a></li>
+    <li><a href="#whitelist">6. A whitelist</a></li>
+    <li><a href="#filtro">7. Filtro com ILIKE</a></li>
+    <li><a href="#repository">8. O repository completo</a></li>
+    <li><a href="#rota">9. A rota</a></li>
+    <li><a href="#replicando">10. Replicando nas outras listagens</a></li>
+    <li><a href="#indices">11. Índices para ordenar e filtrar</a></li>
+    <li><a href="#testes">12. Testando de verdade</a></li>
+    <li><a href="#limites">13. Limites e defaults</a></li>
+    <li><a href="#erros-comuns">14. Erros comuns</a></li>
+    <li><a href="#proximos-passos">15. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="19-documentacao-openapi.html">19. Documentação com OpenAPI &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 18</div>
+  <h1>Paginação, filtro e ordenação</h1>
+  <p class="subtitle">A parte 3 da trilha API REST ensinou as convenções; a API nunca as implementou. <code>GET /alunos</code> devolve a tabela inteira, sem exceção — hoje são 111 linhas e funciona, o que é exatamente o que torna o problema fácil de adiar.</p>
+
+  <h2 id="o-problema">1. A tabela inteira na resposta</h2>
+  <pre><code>curl -s http://localhost:3000/alunos -H "Authorization: Bearer TOKEN_ADMIN" | wc -c
+# dezenas de milhares de caracteres, e crescendo</code></pre>
+  <p>O tamanho é o sintoma óbvio. Os problemas reais são três, e nenhum aparece enquanto a tabela é pequena:</p>
+  <table>
+    <thead><tr><th>Problema</th><th>Quando aparece</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Memória do servidor</strong></td><td>O Node carrega todas as linhas num array antes de responder. 100 mil alunos viram centenas de MB por requisição — e duas requisições simultâneas dobram isso.</td></tr>
+      <tr><td><strong>Tempo de resposta</strong></td><td>O cliente espera o banco varrer tudo, a API serializar tudo e a rede transportar tudo, para exibir os 20 primeiros.</td></tr>
+      <tr><td><strong>Impossível de usar</strong></td><td>Sem filtro nem ordenação, achar um aluno específico exige baixar todos e procurar no cliente. É a API empurrando trabalho para quem a consome.</td></tr>
+    </tbody>
+  </table>
+  <p>As três coisas desta parte resolvem juntas o mesmo problema — "quero um pedaço, não tudo" —, e é por isso que costumam aparecer na mesma conversa: <strong>paginação</strong> escolhe o tamanho do pedaço, <strong>ordenação</strong> escolhe qual pedaço vem primeiro, e <strong>filtro</strong> diminui o universo antes de cortar.</p>
+
+  <h2 id="estrategias">2. Duas formas de paginar</h2>
+  <table>
+    <thead><tr><th></th><th>Offset <span class="badge badge-ok">escolhido</span></th><th>Cursor</th></tr></thead>
+    <tbody>
+      <tr><td>Como o cliente pede</td><td><code>?pagina=3&amp;limite=20</code></td><td><code>?depois_de=abc123&amp;limite=20</code></td></tr>
+      <tr><td>SQL</td><td><code>LIMIT 20 OFFSET 40</code></td><td><code>WHERE id &gt; 123 LIMIT 20</code></td></tr>
+      <tr><td>Ir direto à página 50</td><td>Sim</td><td>Não — só avançar de um em um</td></tr>
+      <tr><td>Custo em tabela grande</td><td>Cresce: o banco precisa percorrer e descartar as linhas puladas</td><td>Constante, se houver índice</td></tr>
+      <tr><td>Se alguém inserir enquanto você navega</td><td>Uma linha pode repetir ou sumir entre páginas</td><td>Estável</td></tr>
+    </tbody>
+  </table>
+  <p>Offset é o escolhido aqui pelo mesmo critério das outras escolhas da trilha: resolve o problema que existe, com a menor complexidade. Ele permite a interface que as pessoas esperam — números de página, "ir para a última" — e o custo só incomoda em tabelas realmente grandes, navegadas até páginas profundas.</p>
+  <div class="rule">
+    <span class="tag">Quando trocar por cursor</span>
+    <p>Dois sinais: páginas profundas ficando lentas (<code>OFFSET 100000</code> obriga o Postgres a ler e jogar fora cem mil linhas), ou uma lista que muda o tempo todo, onde repetir/pular item entre páginas é inaceitável — feed, notificação, log. Redes sociais usam cursor por causa do segundo motivo, não do primeiro.</p>
+    <p>Para uma listagem administrativa de alunos, que muda algumas vezes por dia e é navegada nas primeiras páginas, offset é adequado por muitos anos.</p>
+  </div>
+
+  <h2 id="envelope">3. Onde colocar o total</h2>
+  <p>Quem recebe uma página precisa saber quantas existem — senão não dá para desenhar a navegação. Duas convenções:</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Headers</h4>
+      <pre><code>X-Total-Count: 111
+Link: &lt;...?pagina=2&gt;; rel="next"
+
+[ {...}, {...} ]</code></pre>
+      <p>O corpo continua um array puro. Elegante, e o <code>Link</code> é padronizado (RFC 8288) — mas metadado em header é fácil de ignorar, e o CORS da parte 9 precisaria expor os headers explicitamente.</p>
+    </div>
+    <div class="good">
+      <h4>Envelope no corpo</h4>
+      <pre><code>{
+  "dados": [ {...}, {...} ],
+  "paginacao": {
+    "pagina": 1, "limite": 20,
+    "total": 111, "total_paginas": 6
+  }
+}</code></pre>
+      <p>Tudo num lugar só, visível para quem abrir a resposta. É o que a maioria das APIs faz hoje.</p>
+    </div>
+  </div>
+  <div class="warn">
+    <p><strong>Terceira quebra de contrato da trilha</strong> (depois do <code>token</code> na parte 8 e do refresh saindo do corpo na parte 11). Quem lia <code>resposta[0].nome</code> passa a precisar de <code>resposta.dados[0].nome</code>. Em API com clientes reais, isso exigiria versionamento — <code>/v2/alunos</code> — ou um período devolvendo os dois formatos. Aqui, o único cliente é o seu <code>curl</code> e a sua suíte de testes, que vamos atualizar na seção 12.</p>
+  </div>
+
+  <h2 id="schema">4. O schema da query</h2>
+  <p>Os parâmetros chegam pela query string, e a parte 12 já deixou o middleware <code>validar</code> pronto para recebê-los. Todos são opcionais — <code>GET /alunos</code> sem nada precisa continuar funcionando.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">schemas/paginacaoSchema.js</span> — uma função que monta o schema, porque cada rota tem colunas ordenáveis diferentes:</p>
+  </div>
+  <pre><code>const { z } = require('zod');
+
+const LIMITE_PADRAO = 20;
+const LIMITE_MAXIMO = 100;
+
+function paginacaoSchema(colunasOrdenaveis) {
+  return z.object({
+    pagina: z.coerce.number().int().positive().default(1),
+    limite: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(LIMITE_MAXIMO)
+      .default(LIMITE_PADRAO),
+    ordenar_por: z.enum(colunasOrdenaveis).default(colunasOrdenaveis[0]),
+    ordem: z.enum(['asc', 'desc']).default('asc'),
+  });
+}
+
+module.exports = { paginacaoSchema, LIMITE_PADRAO, LIMITE_MAXIMO };</code></pre>
+  <p>Três detalhes que a parte 12 tornou possíveis:</p>
+  <ul>
+    <li><strong><code>z.coerce.number()</code></strong> — query string é sempre texto; <code>"3"</code> chega como <code>3</code> no handler.</li>
+    <li><strong><code>.default(...)</code></strong> — o middleware escreve o resultado validado de volta em <code>req.query</code> (com <code>Object.defineProperty</code>, pelo motivo explicado na parte 12, seção 7), então o handler recebe <code>pagina: 1</code> mesmo quando o cliente não mandou nada. Nada de <code>?? 1</code> espalhado pelo código. Se <code>pagina</code> ou <code>limite</code> chegarem <code>undefined</code> no handler — e <code>total_paginas</code> vier <code>null</code> no JSON —, é essa escrita de volta que não está funcionando.</li>
+    <li><strong><code>z.enum(colunasOrdenaveis)</code></strong> — é aqui que a segurança da seção 5 acontece. Um valor fora da lista vira <code>400</code> antes de chegar perto do SQL.</li>
+  </ul>
+  <p>E continua <code>z.object</code>, não <code>z.strictObject</code>, pelo motivo da parte 12: um <code>?utm_source=</code> colado na URL não pode derrubar a requisição.</p>
+
+  <h2 id="ordenacao">5. Ordenação não pode ser parametrizada</h2>
+  <p>Desde a parte 4, toda entrada do usuário vai pro SQL como parâmetro (<code>$1</code>), nunca concatenada. Ordenação é a exceção — e entender por quê evita um bug silencioso e uma falha de segurança.</p>
+  <p>A tentativa natural:</p>
+  <pre><code>SELECT nome FROM alunos ORDER BY $1 LIMIT 5</code></pre>
+  <p>Isso <strong>não dá erro</strong>. Roda, devolve linhas, e parece funcionar. Rode com dois valores diferentes e compare:</p>
+  <pre><code>ORDER BY $1 com "nome": Ana Silva, João Pereira, Maria Costa, Carla Souza, Bruno Lima
+ORDER BY $1 com "id"  : Ana Silva, João Pereira, Maria Costa, Carla Souza, Bruno Lima
+sem ORDER BY nenhum   : Ana Silva, João Pereira, Maria Costa, Carla Souza, Bruno Lima
+ORDER BY nome de fato : Aluno Corrida 1, Aluno Corrida 2, Aluno Corrida 3, Ana Silva, ...</code></pre>
+  <div class="warn">
+    <p>As três primeiras linhas são <strong>idênticas</strong>. O motivo: um parâmetro é sempre um <em>valor</em>, nunca um <em>identificador</em>. O Postgres recebe a string <code>'nome'</code> e entende "ordene por esta constante" — e ordenar todas as linhas pela mesma constante não reordena nada.</p>
+    <p>É o pior tipo de bug: sem erro, sem aviso, e a resposta tem a cara de estar certa. Você testaria a ordenação, veria uma lista de alunos, e seguiria em frente.</p>
+  </div>
+  <p>Como o nome da coluna precisa ser interpolado direto na string SQL, ele volta a ser o vetor de SQL injection que a parte 4 fechou:</p>
+  <pre><code>// se ordenar_por vier do usuário sem controle:
+`ORDER BY ${ordenar_por}`
+// com ordenar_por = "id; DROP TABLE alunos--"</code></pre>
+
+  <h2 id="whitelist">6. A whitelist</h2>
+  <p>A saída é nunca deixar o valor do usuário chegar ao SQL — só um valor <strong>seu</strong>, escolhido a partir do que ele pediu. Isso é uma <em>whitelist</em>: um mapa de valores aceitos, com tudo que não está nele caindo num padrão.</p>
+  <pre><code>const COLUNAS_ORDENAVEIS = {
+  id: 'id',
+  nome: 'nome',
+  criado_em: 'criado_em',
+};
+
+const coluna = COLUNAS_ORDENAVEIS[ordenar_por] ?? 'id';
+const direcao = ordem === 'desc' ? 'DESC' : 'ASC';</code></pre>
+  <p>O que entra no SQL é <code>coluna</code>, que só pode ser uma das três strings escritas por você. <code>"id; DROP TABLE alunos--"</code> não é chave do objeto, então vira <code>'id'</code>.</p>
+  <div class="callout">
+    <p>Repare que isso é defesa em <strong>duas camadas</strong>, e as duas são intencionais: o <code>z.enum</code> do schema (seção 4) já recusa valor fora da lista com <code>400</code>, então a whitelist do repository nunca deveria receber lixo. Ela existe para o caso de alguém chamar o repository de outro lugar — de um script, de um teste, de uma rota futura que esqueça o <code>validar</code>. A camada que protege o SQL fica colada no SQL.</p>
+  </div>
+  <p>Mesma lógica no <code>ordem</code>: em vez de interpolar o que veio, comparar e escolher entre duas constantes suas.</p>
+
+  <h2 id="filtro">7. Filtro com ILIKE</h2>
+  <p>Buscar aluno por nome parcial, sem diferenciar maiúsculas: o Postgres tem <code>ILIKE</code>, a versão de <code>LIKE</code> que ignora caixa.</p>
+  <pre><code>WHERE nome ILIKE '%' || $1 || '%'</code></pre>
+  <p>Repare onde estão os <code>%</code>: <strong>concatenados no SQL</strong>, não dentro do parâmetro. As duas formas funcionam — <code>ILIKE $1</code> com o valor <code>'%ana%'</code> daria o mesmo resultado — mas concatenar no SQL deixa explícito que a busca é "contém", em vez de esconder isso na montagem do valor. O conteúdo digitado pelo usuário continua sendo só <code>$1</code>, parametrizado.</p>
+  <pre><code># filtro normal
+?nome=ana  →  Ana Silva | Joana Prado
+
+# tentativa de injection no filtro
+?nome='; DROP TABLE alunos; --  →  0 linhas, tabela intacta</code></pre>
+  <p>O segundo caso é o esperado: o texto malicioso é tratado como texto, e a API responde que ninguém tem esse nome.</p>
+  <div class="rule">
+    <span class="tag">O custo do % no começo</span>
+    <p><code>ILIKE '%ana%'</code> não usa índice comum — o Postgres precisa varrer a tabela, porque um índice B-tree organiza por prefixo e a busca não tem prefixo fixo. Com 111 alunos é irrelevante; com milhões, vira lento.</p>
+    <p>As saídas, quando chegar lá: índice <strong>trigram</strong> (extensão <code>pg_trgm</code>, que indexa trechos de três letras e acelera <code>ILIKE</code> com <code>%</code> dos dois lados) ou busca textual de verdade (<code>tsvector</code>). Nenhuma das duas cabe agora — mas saber o nome ajuda quando o problema aparecer.</p>
+  </div>
+
+  <h2 id="repository">8. O repository completo</h2>
+  <p>Agora juntando tudo. A função monta a query em pedaços porque o filtro é opcional — e isso muda a numeração dos parâmetros.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">repositories/alunosRepository.js</span> — a função <code>listar</code>, que hoje não recebe nada e devolve tudo. Adicione também a constante de colunas antes dela:</p>
+  </div>
+  <pre><code><span class="ln-add">const COLUNAS_ORDENAVEIS = {
+  id: 'id',
+  nome: 'nome',
+  criado_em: 'criado_em',
+};</span>
+
+<span class="ln-del">async function listar() {
+  const query =
+    'SELECT id, nome, email, data_nascimento, criado_em FROM alunos ORDER BY id';
+  const resultado = await pool.query(query);
+  return resultado.rows;
+}</span>
+<span class="ln-add">async function listar({
+  pagina = 1,
+  limite = 20,
+  ordenar_por = 'id',
+  ordem = 'asc',
+  nome,
+} = {}) {
+  const coluna = COLUNAS_ORDENAVEIS[ordenar_por] ?? 'id';
+  const direcao = ordem === 'desc' ? 'DESC' : 'ASC';
+
+  const valores = [];
+  let where = '';
+
+  if (nome) {
+    valores.push(nome);
+    where = `WHERE nome ILIKE '%' || $${valores.length} || '%'`;
+  }
+
+  valores.push(limite, (pagina - 1) * limite);
+
+  const query = /* sql */ `
+    SELECT id, nome, email, data_nascimento, criado_em,
+           COUNT(*) OVER() AS total
+    FROM alunos
+    ${where}
+    ORDER BY ${coluna} ${direcao}
+    LIMIT $${valores.length - 1} OFFSET $${valores.length}
+  `;
+
+  const resultado = await pool.query(query, valores);
+
+  const total = resultado.rows.length
+    ? Number(resultado.rows[0].total)
+    : 0;
+
+  return {
+    dados: resultado.rows.map(({ total: _total, ...aluno }) => aluno),
+    total,
+  };
+}</span></code></pre>
+  <p>Três pontos que merecem atenção:</p>
+  <table>
+    <thead><tr><th>Trecho</th><th>Por quê</th></tr></thead>
+    <tbody>
+      <tr><td><code>COUNT(*) OVER()</code></td><td>Devolve o total de linhas que <strong>satisfazem o filtro</strong>, ignorando o <code>LIMIT</code>, na mesma consulta. A alternativa seria uma segunda query <code>SELECT COUNT(*)</code> — que exigiria repetir o <code>WHERE</code> e poderia ver um estado diferente do banco.</td></tr>
+      <tr><td><code>Number(...total)</code></td><td><code>COUNT</code> devolve <code>bigint</code>, e o driver <code>pg</code> entrega bigint como <strong>string</strong> (para não perder precisão em números gigantes). Sem o <code>Number</code>, o JSON sairia com <code>"total": "111"</code>, entre aspas.</td></tr>
+      <tr><td><code>valores.length - 1</code></td><td>A posição de <code>$</code> muda conforme o filtro existir ou não: sem filtro, <code>LIMIT $1 OFFSET $2</code>; com filtro, <code>LIMIT $2 OFFSET $3</code>. Contar o array em vez de escrever o número fixo é o que mantém isso correto.</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <p>Quando <strong>nenhuma</strong> linha bate no filtro, não há linha nenhuma para carregar o <code>COUNT(*) OVER()</code> — por isso o <code>resultado.rows.length ? ... : 0</code>. Sem essa guarda, <code>resultado.rows[0].total</code> seria erro de leitura em <code>undefined</code>, e a busca por um nome inexistente responderia <code>500</code>.</p>
+  </div>
+
+  <h2 id="rota">9. A rota</h2>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">schemas/index.js</span> — reexporte o schema novo junto dos que já existem:</p>
+  </div>
+  <pre><code><span class="ln-add">const { paginacaoSchema } = require('./paginacaoSchema');</span>
+
+module.exports = {
+<span class="ln-ctx">  // ...os schemas que já estão aqui</span>
+<span class="ln-add">  paginacaoSchema,</span>
+};</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/alunos.js</span> — no topo, acrescente o schema à desestruturação existente; depois a rota <code>GET /</code>, que ganha o <code>validar</code> na assinatura e passa a devolver o envelope:</p>
+  </div>
+  <pre><code><span class="ln-del">const { criarAlunoSchema, idParamSchema } = require('../schemas');</span>
+<span class="ln-add">const {
+  criarAlunoSchema,
+  idParamSchema,
+  paginacaoSchema,
+} = require('../schemas');
+
+const listarAlunosQuerySchema = paginacaoSchema([
+  'id',
+  'nome',
+  'criado_em',
+]).extend({
+  nome: z.string().trim().min(1).optional(),
+});</span>
+
+<span class="ln-del">router.get('/', autenticar, autorizar('admin'), async (req, res) => {
+  const alunos = await alunosRepository.listar();
+
+  res.json(alunos);
+});</span>
+<span class="ln-add">router.get(
+  '/',
+  autenticar,
+  autorizar('admin'),
+  validar({ query: listarAlunosQuerySchema }),
+  async (req, res) => {
+    const { pagina, limite } = req.query;
+
+    const { dados, total } = await alunosRepository.listar(req.query);
+
+    res.json({
+      dados,
+      paginacao: {
+        pagina,
+        limite,
+        total,
+        total_paginas: Math.ceil(total / limite),
+      },
+    });
+  },
+);</span></code></pre>
+  <p>O <code>.extend(...)</code> acrescenta o filtro específico desta rota ao schema genérico de paginação. Como ele usa <code>z</code> diretamente, o arquivo precisa importar o Zod:</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">routes/alunos.js</span> — mais um import no topo:</p>
+  </div>
+  <pre><code><span class="ln-add">const { z } = require('zod');</span></code></pre>
+  <p>Repare que <code>alunosRepository.listar(req.query)</code> passa o objeto inteiro. Isso funciona porque os nomes dos parâmetros da query e os da função coincidem — e coincidem porque foram escolhidos assim. Quando divergirem, é melhor mapear explicitamente do que renomear um dos lados só para manter o atalho.</p>
+
+  <h2 id="replicando">10. Replicando nas outras listagens</h2>
+  <p>Três rotas listam coleções. As outras duas seguem o mesmo padrão, com colunas e filtros próprios:</p>
+  <table>
+    <thead><tr><th>Rota</th><th>Ordenar por</th><th>Filtros</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /alunos</code> <span class="badge badge-ok">feito</span></td><td><code>id</code>, <code>nome</code>, <code>criado_em</code></td><td><code>nome</code></td></tr>
+      <tr><td><code>GET /instrutores</code></td><td><code>id</code>, <code>nome</code>, <code>especialidade</code></td><td><code>nome</code>, <code>especialidade</code></td></tr>
+      <tr><td><code>GET /aulas</code></td><td><code>id</code>, <code>nome</code>, <code>hora_inicio</code></td><td><code>instrutor_id</code> (já existe), <code>dia_semana</code></td></tr>
+    </tbody>
+  </table>
+  <div class="warn">
+    <p><code>GET /aulas</code> tem uma diferença que importa: ela <strong>já</strong> tem um filtro (<code>instrutor_id</code>, da parte 5) e um schema de query (<code>listarAulasQuerySchema</code>, da parte 12). O caminho ali é <em>estender</em> o que existe, não criar outro schema em paralelo — dois schemas para a mesma rota é a receita para um deles ser esquecido na próxima alteração.</p>
+    <p>E o filtro por <code>dia_semana</code> deve reusar a constante <code>DIAS</code> que o <code>aulaSchema.js</code> já exporta desde a parte 12, em vez de repetir a lista dos sete dias. Lista de valores válidos duplicada é lista que vai divergir.</p>
+  </div>
+  <p>Como <code>listar</code> muda de assinatura nas três, todo lugar que chama essas funções precisa acompanhar — inclusive o <code>GET /aulas</code> que hoje faz <code>aulasRepository.listar({ instrutor_id: req.query.instrutor_id })</code>.</p>
+
+  <h2 id="indices">11. Índices para ordenar e filtrar</h2>
+  <p>Ordenar por uma coluna sem índice obriga o Postgres a carregar tudo e ordenar em memória a cada requisição. Com índice, ele lê na ordem certa e para quando completa a página.</p>
+  <p>Das colunas que abrimos para ordenação, <code>id</code> já tem índice (é a chave primária) e <code>nome</code> não tem em nenhuma das tabelas. Seguindo o fluxo da parte 14:</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span>:</p>
+  </div>
+  <pre><code>npm run migrate create indices-para-ordenacao</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> o arquivo gerado em <span class="file">migrations/&lt;timestamp&gt;_indices-para-ordenacao.js</span>:</p>
+  </div>
+  <pre><code>export const up = (pgm) => {
+  pgm.createIndex('alunos', 'nome', { ifNotExists: true });
+  pgm.createIndex('instrutores', 'nome', { ifNotExists: true });
+  pgm.createIndex('aulas', 'nome', { ifNotExists: true });
+};
+
+export const down = (pgm) => {
+  pgm.dropIndex('alunos', 'nome', { ifExists: true });
+  pgm.dropIndex('instrutores', 'nome', { ifExists: true });
+  pgm.dropIndex('aulas', 'nome', { ifExists: true });
+};</code></pre>
+  <div class="callout">
+    <p>Índice não é de graça: cada um ocupa espaço e torna <code>INSERT</code>/<code>UPDATE</code> um pouco mais lentos, porque a estrutura precisa ser atualizada junto. Criar índice "por precaução" em toda coluna é um antipadrão comum. A regra prática: indexe o que você <strong>sabe</strong> que vai ordenar ou filtrar com frequência — e aqui você sabe, porque acabou de decidir quais colunas a API aceita nesses papéis.</p>
+  </div>
+
+  <h2 id="testes">12. Testando de verdade</h2>
+  <p>Esta é a primeira parte escrita <em>depois</em> da suíte existir (parte 16) e do CI rodar sozinho (parte 17). Aproveite: os testes de paginação são fáceis de escrever e teriam pego pelo menos dois dos erros da seção 14.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">tests/paginacao.test.js</span>:</p>
+  </div>
+  <pre><code>const request = require('supertest');
+const app = require('../app');
+const pool = require('../db/pool');
+const { criarAlunoLogado, criarInstrutorLogado } = require('./ajudantes');
+
+afterAll(() => pool.end());
+
+describe('GET /alunos paginado', () => {
+  it('devolve envelope com dados e paginação', async () => {
+    const admin = await criarInstrutorLogado('admin');
+    await criarAlunoLogado();
+
+    const resposta = await request(app)
+      .get('/alunos')
+      .set('Authorization', `Bearer ${admin.token}`);
+
+    expect(resposta.status).toBe(200);
+    expect(Array.isArray(resposta.body.dados)).toBe(true);
+    expect(resposta.body.paginacao).toMatchObject({
+      pagina: 1,
+      limite: 20,
+    });
+    expect(typeof resposta.body.paginacao.total).toBe('number');
+  });
+
+  it('respeita o limite e muda de página', async () => {
+    const admin = await criarInstrutorLogado('admin');
+    await criarAlunoLogado();
+    await criarAlunoLogado();
+    await criarAlunoLogado();
+
+    const p1 = await request(app)
+      .get('/alunos?pagina=1&limite=2')
+      .set('Authorization', `Bearer ${admin.token}`);
+
+    const p2 = await request(app)
+      .get('/alunos?pagina=2&limite=2')
+      .set('Authorization', `Bearer ${admin.token}`);
+
+    expect(p1.body.dados).toHaveLength(2);
+    expect(p2.body.dados).toHaveLength(2);
+
+    const idsP1 = p1.body.dados.map((a) => a.id);
+    const idsP2 = p2.body.dados.map((a) => a.id);
+
+    expect(idsP1).not.toEqual(idsP2);
+  });
+
+  it('ordena de verdade', async () => {
+    const admin = await criarInstrutorLogado('admin');
+    await criarAlunoLogado();
+    await criarAlunoLogado();
+
+    const asc = await request(app)
+      .get('/alunos?ordenar_por=nome&ordem=asc&limite=50')
+      .set('Authorization', `Bearer ${admin.token}`);
+
+    const desc = await request(app)
+      .get('/alunos?ordenar_por=nome&ordem=desc&limite=50')
+      .set('Authorization', `Bearer ${admin.token}`);
+
+    const nomesAsc = asc.body.dados.map((a) => a.nome);
+    const nomesDesc = desc.body.dados.map((a) => a.nome);
+
+    expect(nomesAsc).toEqual([...nomesAsc].sort((x, y) => x.localeCompare(y)));
+    expect(nomesDesc[0]).not.toBe(nomesAsc[0]);
+  });
+
+  it('filtra por nome e ajusta o total', async () => {
+    const admin = await criarInstrutorLogado('admin');
+
+    const semFiltro = await request(app)
+      .get('/alunos')
+      .set('Authorization', `Bearer ${admin.token}`);
+
+    const comFiltro = await request(app)
+      .get('/alunos?nome=zzznaoexiste')
+      .set('Authorization', `Bearer ${admin.token}`);
+
+    expect(comFiltro.status).toBe(200);
+    expect(comFiltro.body.dados).toHaveLength(0);
+    expect(comFiltro.body.paginacao.total).toBe(0);
+    expect(semFiltro.body.paginacao.total).toBeGreaterThan(0);
+  });
+
+  it('recusa coluna de ordenação fora da lista', async () => {
+    const admin = await criarInstrutorLogado('admin');
+
+    const resposta = await request(app)
+      .get('/alunos?ordenar_por=senha_hash')
+      .set('Authorization', `Bearer ${admin.token}`);
+
+    expect(resposta.status).toBe(400);
+  });
+
+  it('recusa limite acima do máximo', async () => {
+    const admin = await criarInstrutorLogado('admin');
+
+    const resposta = await request(app)
+      .get('/alunos?limite=99999')
+      .set('Authorization', `Bearer ${admin.token}`);
+
+    expect(resposta.status).toBe(400);
+  });
+});</code></pre>
+  <div class="rule">
+    <span class="tag">O teste que prova o bug da seção 5</span>
+    <p>O terceiro teste — "ordena de verdade" — é o mais importante do arquivo, e o mais fácil de escrever errado. Verificar só que a resposta tem <code>200</code> e traz alunos passaria com o <code>ORDER BY $1</code> quebrado, porque a lista existe, ela só não está ordenada.</p>
+    <p>O que ele faz em vez disso: pega os nomes devolvidos e confirma que estão em ordem alfabética de fato, e que <code>desc</code> começa por outro nome que <code>asc</code>. Um teste de ordenação que não compara a ordem não testa ordenação.</p>
+  </div>
+  <div class="warn">
+    <p>Você vai precisar atualizar os testes existentes: qualquer um que trate a resposta de <code>GET /alunos</code> como array puro quebra com o envelope. É a quebra de contrato da seção 3 cobrando o preço — e é bom que cobre agora, na sua máquina, em vez de num cliente.</p>
+  </div>
+
+  <h2 id="limites">13. Limites e defaults</h2>
+  <table>
+    <thead><tr><th>Decisão</th><th>Valor</th><th>Motivo</th></tr></thead>
+    <tbody>
+      <tr><td>Limite padrão</td><td>20</td><td>Cabe numa tela, resposta pequena. Cliente que quer mais, pede.</td></tr>
+      <tr><td>Limite máximo</td><td>100</td><td><strong>Não é conveniência, é proteção.</strong> Sem teto, <code>?limite=10000000</code> devolve a tabela inteira — e aí toda esta parte não serviu para nada. É a mesma família do limite de body da parte 9.</td></tr>
+      <tr><td>Página padrão</td><td>1</td><td>Páginas contadas a partir de 1, não de 0: é o que o usuário final vê na interface.</td></tr>
+      <tr><td>Ordenação padrão</td><td><code>id asc</code></td><td>Precisa existir uma. Sem <code>ORDER BY</code>, o Postgres não garante ordem nenhuma — e a mesma consulta pode devolver ordens diferentes, fazendo item pular entre páginas.</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <p>Esse último ponto é sutil e vale insistir: banco relacional não tem ordem "natural". A ordem que você observa hoje é consequência de como as linhas foram gravadas, e muda depois de um <code>UPDATE</code>, um <code>VACUUM</code> ou uma mudança de plano de execução. Paginação sem <code>ORDER BY</code> determinístico é paginação que repete e pula itens sem nenhuma alteração nos dados.</p>
+  </div>
+
+  <h2 id="erros-comuns">14. Erros comuns</h2>
+  <ol>
+    <li><strong><code>ORDER BY $1</code></strong> — não ordena e não avisa (seção 5). Só whitelist resolve.</li>
+    <li><strong>Interpolar <code>ordenar_por</code> direto no SQL</strong> — reabre o SQL injection que a parte 4 fechou, agora por um caminho que <code>$1</code> não protege.</li>
+    <li><strong>Esquecer o teto do <code>limite</code></strong> — <code>?limite=99999999</code> anula a paginação inteira.</li>
+    <li><strong>Total como string</strong> — <code>COUNT</code> é <code>bigint</code>, o driver devolve string. Sem <code>Number()</code>, o JSON sai com <code>"total": "111"</code> e o cálculo de páginas vira concatenação de texto.</li>
+    <li><strong>Ler <code>rows[0].total</code> sem checar se há linhas</strong> — busca sem resultado vira <code>500</code> (seção 8).</li>
+    <li><strong>Paginar sem <code>ORDER BY</code></strong> — itens repetem ou somem entre páginas, sem nada ter mudado (seção 13).</li>
+    <li><strong>Contar com uma segunda query sem repetir o <code>WHERE</code></strong> — o total ignora o filtro, e a interface mostra "6 páginas" para um resultado de 2 linhas.</li>
+    <li><strong>Testar ordenação só pelo status</strong> — <code>200</code> não diz nada sobre ordem (seção 12).</li>
+    <li><strong>Esquecer de atualizar os testes e clientes existentes</strong> — o envelope quebra quem esperava array.</li>
+  </ol>
+
+  <h2 id="proximos-passos">15. O que vem a seguir</h2>
+  <p>As listagens agora devolvem pedaços em vez de tabelas inteiras, com filtro e ordenação controlados por uma lista de valores que você definiu. Falta um item da categoria <strong>contrato da API</strong>:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Documentação OpenAPI</strong> — a próxima parte. Hoje, a única forma de descobrir que <code>GET /alunos</code> aceita <code>?pagina</code>, <code>?limite</code>, <code>?ordenar_por</code>, <code>?ordem</code> e <code>?nome</code> é lendo o código. OpenAPI é o formato padrão para descrever isso de forma que ferramentas entendam — e o Swagger UI transforma a especificação numa página onde dá para testar cada rota pelo navegador. Boa parte do trabalho já existe: os schemas Zod da parte 12 e desta parte descrevem a entrada de cada rota, e há como derivar a documentação deles em vez de escrever tudo de novo.</li>
+    </ol>
+  </div>
+  <p>Depois disso, só falta <strong>produção</strong>: logging estruturado e health check, Dockerfile do app, e o deploy com HTTPS — onde o <code>trust proxy</code> da parte 9, o <code>Secure</code> do cookie da parte 11 e o passo de migrations da parte 14 finalmente entram em ação.</p>
+  <p>Fica registrado como dívida consciente: a paginação por offset não é estável sob inserções concorrentes (seção 2), e o filtro por <code>ILIKE '%...%'</code> não usa índice (seção 7). As duas só passam a incomodar em escala que este projeto não tem — e agora você sabe o nome da solução de cada uma.</p>
+
+  <footer class="closing">
+    <p>Ao testar, o caso que vale prestar atenção é a ordenação: compare <code>?ordenar_por=nome&amp;ordem=asc</code> com <code>&amp;ordem=desc</code> e confirme que a primeira linha muda. Se as duas devolverem a mesma coisa, a whitelist não está sendo aplicada — e esse é exatamente o bug que não dá erro. Volta com dúvidas, principalmente se o <code>total</code> vier entre aspas no JSON ou se alguma listagem começar a repetir itens entre páginas.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

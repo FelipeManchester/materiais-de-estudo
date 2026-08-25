@@ -1,0 +1,1236 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Documentação com OpenAPI</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="18-paginacao-filtro-ordenacao.html">&larr; 18. Paginação, filtro e ordenação</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-problema">1. A API que só o código descreve</a></li>
+    <li><a href="#o-que-e">2. O que é OpenAPI</a></li>
+    <li><a href="#escrever-ou-derivar">3. Escrever à mão ou derivar</a></li>
+    <li><a href="#zod-json-schema">4. Zod vira JSON Schema</a></li>
+    <li><a href="#io-input">5. io: input, e por que importa</a></li>
+    <li><a href="#estrutura">6. A estrutura da especificação</a></li>
+    <li><a href="#components">7. Componentes reaproveitáveis</a></li>
+    <li><a href="#seguranca">8. Descrevendo a autenticação</a></li>
+    <li><a href="#query">9. Query params a partir do schema</a></li>
+    <li><a href="#paths">10. Uma rota vira um path item</a></li>
+    <li><a href="#saida">11. Os schemas de saída</a></li>
+    <li><a href="#modulos">12. Um módulo de paths por recurso</a></li>
+    <li><a href="#juntando">13. Juntando tudo no openapi.js</a></li>
+    <li><a href="#servindo">14. Servindo o Swagger UI</a></li>
+    <li><a href="#helmet">15. O Swagger e o helmet</a></li>
+    <li><a href="#spec-json">16. Expondo a spec crua</a></li>
+    <li><a href="#divergir">17. O risco de a doc mentir</a></li>
+    <li><a href="#testando">18. Testando</a></li>
+    <li><a href="#erros-comuns">19. Erros comuns</a></li>
+    <li><a href="#proximos-passos">20. O que vem a seguir</a></li>
+  </ol>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 19</div>
+  <h1>Documentação com OpenAPI</h1>
+  <p class="subtitle">A API está completa e testada, e ainda assim ninguém além de você consegue usá-la sem abrir o código. Esta parte descreve o contrato num formato que ferramentas entendem — e transforma essa descrição numa página onde dá para testar cada rota pelo navegador.</p>
+
+  <h2 id="o-problema">1. A API que só o código descreve</h2>
+  <p>Responda sem olhar o projeto: o que <code>POST /alunos</code> exige no corpo? Quantos caracteres o nome pode ter? <code>GET /alunos</code> aceita quais parâmetros de query? Quem pode chamar? O que volta em caso de erro?</p>
+  <p>Tudo isso existe, escrito com precisão — espalhado entre <code>schemas/alunoSchema.js</code>, <code>routes/alunos.js</code> e a matriz da parte 10. Um consumidor da sua API precisaria ler os três, em JavaScript, para montar uma requisição.</p>
+  <table>
+    <thead><tr><th>Sem documentação</th><th>Com OpenAPI</th></tr></thead>
+    <tbody>
+      <tr><td>"Manda um <code>curl</code> de exemplo pra mim?"</td><td>Uma página com todas as rotas, campos e formatos.</td></tr>
+      <tr><td>Descobrir os erros possíveis testando até quebrar.</td><td>Cada resposta documentada, com o formato do corpo.</td></tr>
+      <tr><td>Cliente escrito na mão, campo por campo.</td><td>Cliente gerado a partir da especificação.</td></tr>
+      <tr><td>A documentação é o código.</td><td>A documentação <em>nasce</em> do código (seções 4 e 17).</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <p>Isso importa especialmente no seu caso: você mencionou querer construir um front-end para esta API. A especificação é exatamente o contrato que o front vai consumir — e a página do Swagger UI é onde você testa uma rota e vê a resposta real antes de escrever a primeira linha do cliente.</p>
+  </div>
+
+  <h2 id="o-que-e">2. O que é OpenAPI</h2>
+  <p><strong>OpenAPI</strong> é um formato padronizado para descrever uma API HTTP: quais caminhos existem, que métodos aceitam, o formato de entrada e saída, os códigos de status, e como autenticar. A descrição é um documento JSON ou YAML — não é código, não roda, é <em>dado</em>.</p>
+  <p>Isso é o que a torna útil: sendo dado num formato conhecido, ferramentas fazem coisas com ela.</p>
+  <table>
+    <thead><tr><th>Ferramenta</th><th>O que faz com a spec</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Swagger UI</strong></td><td>Gera uma página navegável, com formulário para testar cada rota. É o que vamos servir.</td></tr>
+      <tr><td>Geradores de cliente</td><td>Produzem código de cliente em várias linguagens a partir da spec.</td></tr>
+      <tr><td>Postman / Insomnia</td><td>Importam a spec e criam a coleção de requisições pronta.</td></tr>
+      <tr><td>Validadores de contrato</td><td>Conferem se a API responde o que a spec promete.</td></tr>
+    </tbody>
+  </table>
+  <div class="rule">
+    <span class="tag">Swagger ou OpenAPI?</span>
+    <p>Os dois nomes aparecem misturados por motivo histórico. "Swagger" era a especificação original; em 2015 ela foi doada para a OpenAPI Initiative e renomeada para <strong>OpenAPI</strong> a partir da versão 3. "Swagger" hoje é o nome das <em>ferramentas</em> (Swagger UI, Swagger Editor), mantidas pela SmartBear.</p>
+    <p>Na prática: o documento é OpenAPI, a página que o exibe é Swagger UI.</p>
+  </div>
+
+  <h2 id="escrever-ou-derivar">3. Escrever à mão ou derivar</h2>
+  <p>Duas abordagens, e a escolha define se a documentação vai envelhecer bem:</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Escrever à mão</h4>
+      <p>Um arquivo YAML descrevendo tudo. Controle total sobre o texto, e <strong>duas fontes da verdade</strong>: o schema Zod valida, o YAML documenta, e na primeira mudança em um deles os dois divergem em silêncio.</p>
+    </div>
+    <div class="good">
+      <h4>Derivar dos schemas</h4>
+      <p>Os schemas Zod das partes 12 e 18 já descrevem cada entrada com precisão — tipo, tamanho, formato, valores aceitos. Converter isso em OpenAPI mantém uma fonte só: mudou o schema, mudou a doc.</p>
+    </div>
+  </div>
+  <p>Vamos derivar. Não dá para derivar <em>tudo</em> — descrição em prosa, exemplos e códigos de resposta continuam sendo escritos à mão —, mas a parte que mais muda e mais erra quando desatualiza (o formato dos dados) sai de graça.</p>
+
+  <h2 id="zod-json-schema">4. Zod vira JSON Schema</h2>
+  <p>OpenAPI descreve dados usando <strong>JSON Schema</strong>. E o Zod 4 converte para JSON Schema nativamente, sem nenhuma biblioteca extra:</p>
+  <pre><code>const { z } = require('zod');
+const { criarAlunoSchema } = require('./schemas');
+
+console.log(z.toJSONSchema(criarAlunoSchema));</code></pre>
+  <pre><code>{
+  "type": "object",
+  "properties": {
+    "nome":  { "type": "string", "minLength": 2, "maxLength": 120 },
+    "email": { "type": "string", "maxLength": 160, "format": "email", "pattern": "..." },
+    "data_nascimento": { "type": "string", "format": "date", "pattern": "..." },
+    "senha": { "type": "string", "minLength": 8, "maxLength": 72 }
+  },
+  "required": ["nome", "email", "data_nascimento", "senha"],
+  "additionalProperties": false
+}</code></pre>
+  <p>Repare no que veio junto: os limites de tamanho da parte 12, o formato de email, e o <code>additionalProperties: false</code> que corresponde ao <code>z.strictObject</code>. A documentação herda cada decisão de validação sem ninguém redigitar nada.</p>
+  <div class="callout">
+    <p>Se o seu projeto usasse Zod 3, isso exigiria a biblioteca <code>@asteasolutions/zod-to-openapi</code>. A conversão nativa chegou no Zod 4 — e é mais um motivo para a escolha da parte 12 ter envelhecido bem.</p>
+  </div>
+
+  <h2 id="io-input">5. io: input, e por que importa</h2>
+  <p>Um schema Zod descreve duas coisas diferentes: o que entra e o que sai depois das transformações. Para <code>.default()</code> e <code>.trim()</code>, essas duas coisas divergem — e a documentação precisa da <strong>entrada</strong>, que é o que o cliente manda.</p>
+  <p>Compare o mesmo schema de paginação convertido nos dois modos:</p>
+  <table>
+    <thead><tr><th>Modo</th><th><code>required</code></th><th>Significado</th></tr></thead>
+    <tbody>
+      <tr><td><code>io: 'output'</code> (padrão)</td><td><code>["pagina","limite","ordenar_por","ordem"]</code></td><td>Depois do parse, esses campos <em>sempre</em> existem — o default preencheu. Verdade sobre a saída, mentira sobre o que o cliente precisa enviar.</td></tr>
+      <tr><td><code>io: 'input'</code></td><td><code>[]</code></td><td>Nenhum é obrigatório na requisição. É isto que a documentação deve dizer.</td></tr>
+    </tbody>
+  </table>
+  <div class="warn">
+    <p>Documentar com o padrão faria a página do Swagger marcar <code>pagina</code> e <code>limite</code> como <strong>obrigatórios</strong> em <code>GET /alunos</code> — e quem lesse a doc mandaria os dois sempre, achando que a rota exige. A doc estaria descrevendo com precisão um comportamento que não existe.</p>
+  </div>
+  <p>Junto vai <code>target: 'openapi-3.0'</code>, que ajusta detalhes de compatibilidade (o OpenAPI 3.0 usa um dialeto ligeiramente diferente de JSON Schema) e remove o campo <code>$schema</code>, que não pertence a uma spec OpenAPI.</p>
+
+  <h2 id="estrutura">6. A estrutura da especificação</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span> na raiz do projeto:</p>
+  </div>
+  <pre><code>npm install swagger-ui-express</code></pre>
+  <p>Só uma dependência: a conversão vem do Zod que já está instalado. Agora o arquivo da spec — ele vai crescer, então merece diretório próprio.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">docs/openapi.js</span> — diretório novo. Começando pelo esqueleto e pelo conversor:</p>
+  </div>
+  <pre><code>const { z } = require('zod');
+const {
+  criarAlunoSchema,
+  criarInstrutorSchema,
+  criarAulaSchema,
+  paginacaoSchema,
+} = require('../schemas');
+
+function paraJsonSchema(schema) {
+  return z.toJSONSchema(schema, { io: 'input', target: 'openapi-3.0' });
+}
+
+const openapi = {
+  openapi: '3.0.3',
+  info: {
+    title: 'Studio Fit API',
+    version: '1.0.0',
+    description: 'API de agendamento de aulas de uma academia.',
+  },
+  servers: [{ url: 'http://localhost:3000', description: 'Desenvolvimento' }],
+  tags: [
+    { name: 'Autenticação' },
+    { name: 'Alunos' },
+    { name: 'Instrutores' },
+    { name: 'Aulas' },
+  ],
+  components: { /* seção 7 */ },
+  paths: { /* seção 10 em diante */ },
+};
+
+module.exports = openapi;</code></pre>
+  <table>
+    <thead><tr><th>Campo</th><th>Para que serve</th></tr></thead>
+    <tbody>
+      <tr><td><code>openapi</code></td><td>Versão da especificação. <code>3.0.3</code> é a mais compatível com ferramentas hoje.</td></tr>
+      <tr><td><code>info</code></td><td>Nome, versão e descrição da <em>sua</em> API — não da spec.</td></tr>
+      <tr><td><code>servers</code></td><td>Onde a API responde. O Swagger UI usa isso como base ao disparar as requisições de teste. Em produção, entra a URL real.</td></tr>
+      <tr><td><code>tags</code></td><td>Agrupa as rotas na página. Sem isso, tudo aparece numa lista só.</td></tr>
+      <tr><td><code>components</code></td><td>Definições reaproveitáveis: schemas e esquemas de segurança.</td></tr>
+      <tr><td><code>paths</code></td><td>As rotas, uma por caminho, com um objeto por método.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="components">7. Componentes reaproveitáveis</h2>
+  <p>Todo erro da API tem o mesmo formato desde a parte 12 — <code>{ erro }</code>, com <code>detalhes</code> nos casos de validação. Repetir esse objeto em cada resposta de cada rota seria dezenas de cópias. <code>components/schemas</code> guarda uma vez, e as rotas referenciam com <code>$ref</code>.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">docs/openapi.js</span> — preencha o <code>components</code>:</p>
+  </div>
+  <pre><code>  components: {
+    securitySchemes: {
+      bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+    },
+    schemas: {
+      CriarAluno: paraJsonSchema(criarAlunoSchema),
+      CriarInstrutor: paraJsonSchema(criarInstrutorSchema),
+      CriarAula: paraJsonSchema(criarAulaSchema),
+      Erro: {
+        type: 'object',
+        properties: {
+          erro: { type: 'string' },
+          detalhes: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                campo: { type: 'string' },
+                mensagem: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+      Paginacao: {
+        type: 'object',
+        properties: {
+          pagina: { type: 'integer' },
+          limite: { type: 'integer' },
+          total: { type: 'integer' },
+          total_paginas: { type: 'integer' },
+        },
+      },
+    },
+  },</code></pre>
+  <p>As três primeiras entradas são geradas a partir dos schemas Zod. <code>Erro</code> e <code>Paginacao</code> são escritas à mão porque descrevem <strong>saída</strong>, e a API não tem schema Zod para o que devolve — só para o que recebe.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Adicionar</span> <span class="file">docs/openapi.js</span> — um atalho para as respostas de erro, antes do objeto <code>openapi</code>:</p>
+  </div>
+  <pre><code>const erro = (descricao) => ({
+  description: descricao,
+  content: {
+    'application/json': {
+      schema: { $ref: '#/components/schemas/Erro' },
+    },
+  },
+});</code></pre>
+  <p>Com isso, documentar um <code>401</code> vira <code>401: erro('Não autenticado')</code> em vez de seis linhas repetidas.</p>
+
+  <h2 id="seguranca">8. Descrevendo a autenticação</h2>
+  <p>O <code>securitySchemes</code> da seção anterior declara <em>como</em> autenticar; cada rota declara se exige. O <code>bearerAuth</code> descreve exatamente o que a parte 7 construiu: um token JWT no header <code>Authorization</code>.</p>
+  <pre><code>get: {
+  tags: ['Alunos'],
+  summary: 'Lista alunos (somente admin)',
+  security: [{ bearerAuth: [] }],
+  // ...
+}</code></pre>
+  <p>Duas consequências práticas na página do Swagger UI: as rotas protegidas ganham um cadeado, e aparece um botão <strong>Authorize</strong> onde você cola um access token uma vez — todas as requisições de teste passam a mandá-lo.</p>
+  <div class="callout">
+    <p>Rotas sem <code>security</code> são públicas. Vale conferir essa lista contra a matriz da parte 10 enquanto escreve: é a segunda vez que você declara as mesmas permissões, e a doc que discorda do código é pior do que doc nenhuma. Um dia isso pode ser derivado do próprio <code>autorizar(...)</code> — mas aí é infraestrutura, não documentação.</p>
+  </div>
+
+  <h2 id="query">9. Query params a partir do schema</h2>
+  <p>OpenAPI descreve parâmetro de query num formato próprio — um objeto por parâmetro, com <code>name</code>, <code>in</code> e <code>schema</code>. O schema de paginação da parte 18 tem cinco; escrever os cinco à mão em cada rota que lista seria repetir o que o Zod já sabe.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Adicionar</span> <span class="file">docs/openapi.js</span> — uma função que converte um schema de objeto na lista de parâmetros, logo abaixo do <code>paraJsonSchema</code>:</p>
+  </div>
+  <pre><code>function parametrosDeQuery(schema) {
+  const jsonSchema = paraJsonSchema(schema);
+  const obrigatorios = jsonSchema.required ?? [];
+
+  return Object.entries(jsonSchema.properties).map(([nome, definicao]) => ({
+    name: nome,
+    in: 'query',
+    required: obrigatorios.includes(nome),
+    schema: definicao,
+  }));
+}</code></pre>
+  <p>O resultado, para a listagem de alunos, é a lista completa com tipos, limites e valores aceitos:</p>
+  <pre><code>parametros de query gerados: pagina, limite, ordenar_por, ordem, nome
+
+{
+  "name": "pagina",
+  "in": "query",
+  "required": false,
+  "schema": { "default": 1, "type": "integer", "minimum": 0, "exclusiveMinimum": true }
+}</code></pre>
+  <p>O <code>ordenar_por</code> vira um <code>enum</code> na página — quem lê a doc vê exatamente as três colunas aceitas, sem precisar descobrir por tentativa e erro.</p>
+  <div class="warn">
+    <p>Só que <code>listarAlunosQuerySchema</code> e <code>listarInstrutoresQuerySchema</code> estão declarados <strong>dentro das rotas</strong> (parte 18), e a spec não alcança nenhum dos dois. Duas saídas: repetir a construção no <code>docs/</code> — que recria a divergência que a seção 3 quer evitar — ou <strong>mover</strong> os schemas para <code>schemas/</code> e importá-los nos dois lugares.</p>
+    <p>A segunda é a correta. Schema que precisa ser conhecido por mais de um módulo pertence a <code>schemas/</code>, que é justamente o lugar criado na parte 12 para isso. <code>listarAulasQuerySchema</code> já mora lá — os outros dois ficaram para trás por acaso, não por decisão.</p>
+  </div>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">schemas/comumSchema.js</span> — cole os dois schemas logo abaixo do <code>listarAulasQuerySchema</code>, iguais aos que estão nas rotas hoje, e exporte-os:</p>
+  </div>
+  <pre><code><span class="ln-ctx">const listarAulasQuerySchema = paginacaoSchema([...]).extend({...}); // já existe, não mexa</span>
+
+<span class="ln-add">// NOVO — veio de routes/alunos.js
+const listarAlunosQuerySchema = paginacaoSchema([
+  'id',
+  'nome',
+  'criado_em',
+]).extend({
+  nome: z.string().trim().min(1).optional(),
+});
+
+// NOVO — veio de routes/instrutores.js
+const listarInstrutoresQuerySchema = paginacaoSchema([
+  'id',
+  'nome',
+  'especialidade',
+]).extend({
+  nome: z.string().trim().min(1).optional(),
+  especialidade: z.string().trim().min(1).optional(),
+});</span>
+
+module.exports = {
+<span class="ln-ctx">  idParamSchema,
+  idsMatriculaParamSchema,
+  listarAulasQuerySchema,</span>
+<span class="ln-add">  listarAlunosQuerySchema,        // NOVO
+  listarInstrutoresQuerySchema,   // NOVO</span>
+<span class="ln-ctx">  cancelarMatriculaSchema,
+};</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">schemas/index.js</span> — os dois nomes novos entram em <strong>dois</strong> lugares: no <code>require('./comumSchema')</code> do topo e no <code>module.exports</code> do fim.</p>
+  </div>
+  <pre><code>const {
+<span class="ln-ctx">  idParamSchema,
+  idsMatriculaParamSchema,
+  listarAulasQuerySchema,</span>
+<span class="ln-add">  listarAlunosQuerySchema,        // NOVO
+  listarInstrutoresQuerySchema,   // NOVO</span>
+<span class="ln-ctx">  cancelarMatriculaSchema,
+} = require('./comumSchema');</span>
+
+<span class="ln-ctx">// ...resto igual, até o module.exports — repita os dois nomes lá também</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-del">Remover</span> <span class="file">routes/alunos.js</span> — apague a declaração local do <code>listarAlunosQuerySchema</code> (o bloco inteiro, logo depois dos <code>require</code>) e passe a importá-lo. Faça o mesmo em <span class="file">routes/instrutores.js</span> com o <code>listarInstrutoresQuerySchema</code>.</p>
+  </div>
+  <pre><code><span class="ln-del">const { z } = require('zod');                    // REMOVER: era só para o .extend()</span>
+
+const {
+  criarAlunoSchema,
+  idParamSchema,
+<span class="ln-del">  paginacaoSchema,                               // REMOVER: só o schema pronto é usado agora</span>
+<span class="ln-add">  listarAlunosQuerySchema,                       // NOVO</span>
+} = require('../schemas');
+
+<span class="ln-del">const listarAlunosQuerySchema = paginacaoSchema([   // REMOVER o bloco inteiro
+  'id',
+  'nome',
+  'criado_em',
+]).extend({
+  nome: z.string().trim().min(1).optional(),
+});</span>
+
+<span class="ln-ctx">const router = express.Router();   // daqui para baixo, nada muda</span></code></pre>
+  <div class="callout">
+    <p>Repare que <code>z</code> e <code>paginacaoSchema</code> ficam sem uso nos dois arquivos depois da mudança — eram usados <em>só</em> para montar o schema que saiu. Deixar os <code>require</code> lá quebra o <code>npm run lint</code> com <code>no-unused-vars</code>. Em <code>routes/instrutores.js</code> vale a mesma checagem: <code>z</code> só aparecia no <code>.extend()</code>.</p>
+  </div>
+
+  <h2 id="paths">10. Uma rota vira um path item</h2>
+  <p>Até aqui a spec descreve <em>tipos</em> e não descreve <em>nenhuma rota</em>. O <code>paths</code> é o mapa: cada chave é um caminho, cada chave interna é um método HTTP, e o objeto de dentro é uma <strong>operação</strong>.</p>
+  <pre><code>paths: {
+  '/alunos': {
+    get:  { /* operação: GET /alunos  */ },
+    post: { /* operação: POST /alunos */ },
+  },
+  '/alunos/{id}/matriculas': {
+    get: { /* ... */ },
+  },
+}</code></pre>
+  <p>Repare no <code>{id}</code>: OpenAPI usa chaves para parâmetro de caminho, não os dois-pontos do Express. <code>/alunos/:id</code> vira <code>/alunos/{id}</code>.</p>
+  <p>Uma operação aceita estas chaves:</p>
+  <table>
+    <thead><tr><th>Chave</th><th>O que é</th></tr></thead>
+    <tbody>
+      <tr><td><code>tags</code></td><td>Em qual grupo da página a rota aparece. Usa os nomes declarados em <code>tags</code> (seção 6).</td></tr>
+      <tr><td><code>summary</code></td><td>Uma linha, mostrada ao lado da rota na lista fechada.</td></tr>
+      <tr><td><code>description</code></td><td>Texto longo, mostrado quando a rota é expandida. É onde cabe a regra de negócio.</td></tr>
+      <tr><td><code>security</code></td><td>Exige autenticação (seção 8). Ausente = rota pública.</td></tr>
+      <tr><td><code>parameters</code></td><td>Parâmetros de caminho (<code>in: 'path'</code>) e de query (<code>in: 'query'</code>, seção 9).</td></tr>
+      <tr><td><code>requestBody</code></td><td>O corpo esperado. Só faz sentido em <code>POST</code>, <code>PUT</code> e <code>PATCH</code>.</td></tr>
+      <tr><td><code>responses</code></td><td>Um objeto por código de status. É a metade do contrato que ninguém documenta e todo mundo precisa.</td></tr>
+    </tbody>
+  </table>
+  <p>Escrita sem nenhum atalho, a operação mais simples do projeto — <code>POST /alunos</code> — fica assim:</p>
+  <pre><code>post: {
+  tags: ['Alunos'],
+  summary: 'Cadastra um aluno',
+  requestBody: {
+    required: true,
+    content: {
+      'application/json': {
+        schema: { $ref: '#/components/schemas/CriarAluno' },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: 'Aluno criado',
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/Aluno' },
+        },
+      },
+    },
+    400: {
+      description: 'Corpo inválido',
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/Erro' },
+        },
+      },
+    },
+  },
+}</code></pre>
+  <p>Trinta linhas para uma rota, e o projeto tem <strong>vinte operações</strong>. Quase tudo aí é a mesma casca de cinco linhas em volta de um <code>$ref</code> — exatamente o tipo de repetição que uma função elimina. O <code>erro()</code> da seção 7 já fez isso para um caso; faltam os outros.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">docs/helpers.js</span> — arquivo novo. Ele recebe <code>paraJsonSchema</code>, <code>parametrosDeQuery</code> e <code>erro</code>, que hoje estão dentro do <code>docs/openapi.js</code>, mais os atalhos que faltavam:</p>
+  </div>
+  <pre><code>const { z } = require('zod');
+
+function paraJsonSchema(schema) {
+  return z.toJSONSchema(schema, { io: 'input', target: 'openapi-3.0' });
+}
+
+function parametrosDeQuery(schema) {
+  const jsonSchema = paraJsonSchema(schema);
+  const obrigatorios = jsonSchema.required ?? [];
+
+  return Object.entries(jsonSchema.properties).map(([nome, definicao]) => ({
+    name: nome,
+    in: 'query',
+    required: obrigatorios.includes(nome),
+    schema: definicao,
+  }));
+}
+
+const referencia = (nome) => ({ $ref: `#/components/schemas/${nome}` });
+
+// corpo da requisição
+const corpo = (nome) => ({
+  required: true,
+  content: { 'application/json': { schema: referencia(nome) } },
+});
+
+// respostas
+const json = (nome, description) => ({
+  description,
+  content: { 'application/json': { schema: referencia(nome) } },
+});
+
+const lista = (nome, description) => ({
+  description,
+  content: {
+    'application/json': {
+      schema: { type: 'array', items: referencia(nome) },
+    },
+  },
+});
+
+const paginado = (nome, description) => ({
+  description,
+  content: {
+    'application/json': {
+      schema: {
+        type: 'object',
+        properties: {
+          dados: { type: 'array', items: referencia(nome) },
+          paginacao: referencia('Paginacao'),
+        },
+      },
+    },
+  },
+});
+
+const erro = (description) => json('Erro', description);
+
+const semConteudo = (description) => ({ description });
+
+const idNoCaminho = (nome = 'id', description = 'Identificador do recurso') => ({
+  name: nome,
+  in: 'path',
+  required: true,
+  description,
+  schema: { type: 'integer', minimum: 1 },
+});
+
+module.exports = {
+  paraJsonSchema,
+  parametrosDeQuery,
+  referencia,
+  corpo,
+  json,
+  lista,
+  paginado,
+  erro,
+  semConteudo,
+  idNoCaminho,
+};</code></pre>
+  <p>Com eles, a mesma operação cabe em nove linhas — e cada linha diz uma coisa só:</p>
+  <pre><code>post: {
+  tags: ['Alunos'],
+  summary: 'Cadastra um aluno',
+  description: 'Rota pública: é o cadastro do próprio aluno.',
+  requestBody: corpo('CriarAluno'),
+  responses: {
+    201: json('Aluno', 'Aluno criado (header Location aponta para ele)'),
+    400: erro('Corpo inválido'),
+  },
+}</code></pre>
+  <div class="warn">
+    <p>Se você rodou <code>npm run lint</code> depois da seção 9, viu três erros de <code>no-unused-vars</code> em <code>docs/openapi.js</code>: <code>paginacaoSchema</code>, <code>parametrosDeQuery</code> e <code>erro</code> declarados e nunca usados. Não era erro seu — era a spec sem <code>paths</code>. Os três ajudantes existiam para servir rotas que ainda não tinham sido escritas. A partir daqui eles saem do <code>openapi.js</code> e passam a ser importados por quem usa.</p>
+  </div>
+
+  <h2 id="saida">11. Os schemas de saída</h2>
+  <p>Os <code>responses</code> da seção anterior referenciam <code>Aluno</code>, e esse schema não existe. A seção 7 criou os de <strong>entrada</strong>, derivados do Zod; o projeto não tem schema nenhum do que a API <em>devolve</em> — o repository faz <code>SELECT</code> e a rota manda as linhas para o <code>res.json</code>. Esses vão escritos à mão.</p>
+  <p>O <code>components</code> também cresce demais para continuar dentro do <code>openapi.js</code>. É a mesma divisão que a parte 5 fez com <code>routes/</code>: quando um arquivo passa a ter dois assuntos, ele vira dois arquivos.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">docs/componentes.js</span> — arquivo novo. Ele recebe o <code>securitySchemes</code> e o <code>schemas</code> que estão hoje dentro do objeto <code>openapi</code>, mais os schemas de saída:</p>
+  </div>
+  <pre><code>const {
+  criarAlunoSchema,
+  criarInstrutorSchema,
+  atualizarInstrutorSchema,
+  criarAulaSchema,
+  atualizarAulaSchema,
+  cancelarMatriculaSchema,
+} = require('../schemas');
+const { paraJsonSchema } = require('./helpers');
+
+const id = { type: 'integer', example: 1 };
+const dataHora = { type: 'string', format: 'date-time' };
+
+module.exports = {
+  securitySchemes: {
+    bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+  },
+
+  schemas: {
+    // Entrada: derivada dos schemas Zod.
+    CriarAluno: paraJsonSchema(criarAlunoSchema),
+    CriarInstrutor: paraJsonSchema(criarInstrutorSchema),
+    AtualizarInstrutor: {
+      ...paraJsonSchema(atualizarInstrutorSchema),
+      description: 'Envie ao menos um campo.',
+    },
+    CriarAula: paraJsonSchema(criarAulaSchema),
+    AtualizarAula: {
+      ...paraJsonSchema(atualizarAulaSchema),
+      description: 'Envie ao menos um campo.',
+    },
+    CancelarMatricula: paraJsonSchema(cancelarMatriculaSchema),
+    Login: {
+      type: 'object',
+      required: ['email', 'senha'],
+      properties: {
+        email: { type: 'string', format: 'email' },
+        senha: { type: 'string' },
+      },
+    },
+
+    // Saída: escrita à mão — não existe schema Zod do que a API devolve.
+    AccessToken: {
+      type: 'object',
+      properties: { access_token: { type: 'string' } },
+    },
+    Aluno: {
+      type: 'object',
+      properties: {
+        id,
+        nome: { type: 'string' },
+        email: { type: 'string', format: 'email' },
+        data_nascimento: { type: 'string', format: 'date' },
+        criado_em: dataHora,
+      },
+    },
+    Instrutor: {
+      type: 'object',
+      properties: {
+        id,
+        nome: { type: 'string' },
+        especialidade: { type: 'string' },
+        email: { type: 'string', format: 'email' },
+        papel: { type: 'string', enum: ['instrutor', 'admin'] },
+        ativo: { type: 'boolean' },
+      },
+    },
+    Aula: {
+      type: 'object',
+      properties: {
+        id,
+        nome: { type: 'string' },
+        instrutor_id: id,
+        dia_semana: { type: 'string' },
+        hora_inicio: { type: 'string', example: '07:00:00' },
+        duracao_minutos: { type: 'integer' },
+        capacidade_maxima: { type: 'integer' },
+      },
+    },
+    Matricula: {
+      type: 'object',
+      properties: {
+        id,
+        aluno_id: id,
+        aula_id: id,
+        status: { type: 'string', enum: ['confirmada', 'cancelada'] },
+        criado_em: dataHora,
+      },
+    },
+    MatriculaDoAluno: {
+      type: 'object',
+      properties: {
+        id,
+        status: { type: 'string', enum: ['confirmada', 'cancelada'] },
+        criado_em: dataHora,
+        aula_id: id,
+        aula_nome: { type: 'string' },
+        dia_semana: { type: 'string' },
+        hora_inicio: { type: 'string' },
+      },
+    },
+    MatriculaDaAula: {
+      type: 'object',
+      properties: {
+        id,
+        status: { type: 'string', enum: ['confirmada', 'cancelada'] },
+        criado_em: dataHora,
+        aluno_id: id,
+        aluno_nome: { type: 'string' },
+        aluno_email: { type: 'string', format: 'email' },
+      },
+    },
+    Paginacao: {
+      type: 'object',
+      properties: {
+        pagina: { type: 'integer' },
+        limite: { type: 'integer' },
+        total: { type: 'integer' },
+        total_paginas: { type: 'integer' },
+      },
+    },
+    Erro: {
+      type: 'object',
+      properties: {
+        erro: { type: 'string' },
+        detalhes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              campo: { type: 'string' },
+              mensagem: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+  },
+};</code></pre>
+  <div class="warn">
+    <p><strong>Três nomes para a mesma entidade.</strong> Escrever esses schemas obriga a olhar o que cada rota realmente devolve, e aí aparece isto: <code>matriculas</code> sai da API em três formatos diferentes.</p>
+    <table>
+      <thead><tr><th>Rota</th><th>Campos devolvidos</th></tr></thead>
+      <tbody>
+        <tr><td><code>POST /aulas/{id}/matriculas</code></td><td><code>id, aluno_id, aula_id, status, criado_em</code> (a linha crua)</td></tr>
+        <tr><td><code>GET /alunos/{id}/matriculas</code></td><td>+ <code>aula_nome, dia_semana, hora_inicio</code> (JOIN com aulas)</td></tr>
+        <tr><td><code>GET /aulas/{id}/matriculas</code></td><td>+ <code>aluno_nome, aluno_email</code> (JOIN com alunos)</td></tr>
+      </tbody>
+    </table>
+    <p>Não é bug — cada listagem devolve o que é útil no contexto dela. Mas é uma inconsistência que ninguém tinha notado, porque nunca alguém precisou <em>escrever</em> o contrato. Documentar é a primeira vez que a API é lida de fora.</p>
+  </div>
+  <div class="callout">
+    <p><strong>O <code>.refine()</code> some na conversão.</strong> <code>atualizarAulaSchema</code> e <code>atualizarInstrutorSchema</code> terminam com um <code>.refine()</code> exigindo ao menos um campo (parte 12). JSON Schema não tem como expressar isso, e o <code>z.toJSONSchema</code> <strong>descarta a regra em silêncio</strong> — sem aviso, sem erro. Por isso os dois ganham um <code>description</code> escrito à mão dizendo o que a conversão perdeu. Toda validação em <code>.refine()</code> tem esse mesmo destino.</p>
+  </div>
+
+  <h2 id="modulos">12. Um módulo de paths por recurso</h2>
+  <p>Vinte operações num objeto só seria um arquivo de quinhentas linhas. Um módulo por recurso, espelhando o <code>routes/</code>, resolve — e deixa óbvio onde mexer quando uma rota muda.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">docs/paths/alunos.js</span> — diretório novo, arquivo novo:</p>
+  </div>
+  <pre><code>const { listarAlunosQuerySchema } = require('../../schemas');
+const {
+  parametrosDeQuery,
+  corpo,
+  json,
+  lista,
+  paginado,
+  erro,
+  idNoCaminho,
+} = require('../helpers');
+
+module.exports = {
+  '/alunos': {
+    get: {
+      tags: ['Alunos'],
+      summary: 'Lista alunos',
+      description: 'Somente admin. Paginado, com filtro por nome.',
+      security: [{ bearerAuth: [] }],
+      parameters: parametrosDeQuery(listarAlunosQuerySchema),
+      responses: {
+        200: paginado('Aluno', 'Página de alunos'),
+        400: erro('Parâmetro de query inválido'),
+        401: erro('Token ausente ou inválido'),
+        403: erro('Papel sem permissão'),
+      },
+    },
+    post: {
+      tags: ['Alunos'],
+      summary: 'Cadastra um aluno',
+      description: 'Rota pública: é o cadastro do próprio aluno.',
+      requestBody: corpo('CriarAluno'),
+      responses: {
+        201: json('Aluno', 'Aluno criado (header Location aponta para ele)'),
+        400: erro('Corpo inválido'),
+      },
+    },
+  },
+
+  '/alunos/{id}/matriculas': {
+    get: {
+      tags: ['Alunos'],
+      summary: 'Lista as matrículas de um aluno',
+      description: 'Cada aluno só enxerga as próprias matrículas.',
+      security: [{ bearerAuth: [] }],
+      parameters: [idNoCaminho('id', 'ID do aluno')],
+      responses: {
+        200: lista('MatriculaDoAluno', 'Matrículas do aluno'),
+        401: erro('Token ausente ou inválido'),
+        403: erro('Tentativa de ver matrículas de outro aluno'),
+        404: erro('Aluno não encontrado'),
+      },
+    },
+  },
+};</code></pre>
+  <p>É o <code>parametrosDeQuery</code> da seção 9 finalmente sendo usado: os cinco parâmetros de <code>GET /alunos</code> não aparecem escritos em lugar nenhum — saem do schema Zod que a seção 9 mudou de lugar justamente para isso.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">docs/paths/auth.js</span>:</p>
+  </div>
+  <pre><code>const { corpo, json, erro, semConteudo } = require('../helpers');
+
+const login = (quem) => ({
+  tags: ['Autenticação'],
+  summary: `Login de ${quem}`,
+  description:
+    'Devolve o access token no corpo e o refresh token num cookie httpOnly.',
+  requestBody: corpo('Login'),
+  responses: {
+    200: json('AccessToken', 'Autenticado'),
+    400: erro('email ou senha ausentes'),
+    401: erro('Credenciais inválidas'),
+    429: erro('Tentativas demais — rate limit do login'),
+  },
+});
+
+module.exports = {
+  '/auth/login': { post: login('aluno') },
+  '/auth/instrutores/login': { post: login('instrutor') },
+
+  '/auth/refresh': {
+    post: {
+      tags: ['Autenticação'],
+      summary: 'Renova o access token',
+      description:
+        'Lê o refresh token do cookie, rotaciona e devolve um novo par. ' +
+        'Não recebe corpo.',
+      responses: {
+        200: json('AccessToken', 'Token renovado'),
+        401: erro('Refresh token ausente, inválido, expirado ou reusado'),
+      },
+    },
+  },
+
+  '/auth/logout': {
+    post: {
+      tags: ['Autenticação'],
+      summary: 'Revoga o refresh token e limpa o cookie',
+      responses: {
+        204: semConteudo('Sessão encerrada'),
+      },
+    },
+  },
+};</code></pre>
+  <p>As duas rotas de login são idênticas menos pelo texto, então viram uma função. E o <code>429</code> está documentado nas quatro: o <code>limitadorLogin</code> da parte 9 é montado no router inteiro em <code>app.js</code>, não só no <code>/login</code>.</p>
+  <div class="callout">
+    <p>O <code>Login</code> é o único schema de entrada escrito à mão, porque <code>routes/auth.js</code> ainda valida com <code>if (!email || !senha)</code> — nunca ganhou schema Zod. Ele é, portanto, o campo mais provável de a doc divergir do código, e um bom primeiro candidato quando você voltar a mexer nessa rota.</p>
+  </div>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">docs/paths/aulas.js</span> — o maior deles, com as três rotas de aula e as três de matrícula:</p>
+  </div>
+  <pre><code>const { listarAulasQuerySchema } = require('../../schemas');
+const {
+  parametrosDeQuery,
+  corpo,
+  json,
+  lista,
+  paginado,
+  erro,
+  semConteudo,
+  idNoCaminho,
+} = require('../helpers');
+
+const gestaoDaAula = [{ bearerAuth: [] }];
+
+module.exports = {
+  '/aulas': {
+    get: {
+      tags: ['Aulas'],
+      summary: 'Lista aulas',
+      description: 'Rota pública. Paginada, com filtro por instrutor e dia.',
+      parameters: parametrosDeQuery(listarAulasQuerySchema),
+      responses: {
+        200: paginado('Aula', 'Página de aulas'),
+        400: erro('Parâmetro de query inválido'),
+      },
+    },
+    post: {
+      tags: ['Aulas'],
+      summary: 'Cria uma aula',
+      description:
+        'Instrutor só cria aula para si mesmo; admin cria para qualquer um.',
+      security: gestaoDaAula,
+      requestBody: corpo('CriarAula'),
+      responses: {
+        201: json('Aula', 'Aula criada'),
+        400: erro('Corpo inválido'),
+        401: erro('Token ausente ou inválido'),
+        403: erro('Instrutor tentando criar aula para outro instrutor'),
+        422: erro('Instrutor inexistente ou conflito de agenda (Regra 3)'),
+      },
+    },
+  },
+
+  '/aulas/{id}': {
+    get: {
+      tags: ['Aulas'],
+      summary: 'Busca uma aula',
+      parameters: [idNoCaminho('id', 'ID da aula')],
+      responses: {
+        200: json('Aula', 'Aula encontrada'),
+        400: erro('ID inválido'),
+        404: erro('Aula não encontrada'),
+      },
+    },
+    patch: {
+      tags: ['Aulas'],
+      summary: 'Atualiza uma aula',
+      security: gestaoDaAula,
+      parameters: [idNoCaminho('id', 'ID da aula')],
+      requestBody: corpo('AtualizarAula'),
+      responses: {
+        200: json('Aula', 'Aula atualizada'),
+        400: erro('Corpo ou ID inválido'),
+        401: erro('Token ausente ou inválido'),
+        403: erro('Aula de outro instrutor'),
+        404: erro('Aula não encontrada'),
+        422: erro('Conflito de agenda (Regra 3)'),
+      },
+    },
+    delete: {
+      tags: ['Aulas'],
+      summary: 'Remove uma aula',
+      security: gestaoDaAula,
+      parameters: [idNoCaminho('id', 'ID da aula')],
+      responses: {
+        204: semConteudo('Aula removida'),
+        401: erro('Token ausente ou inválido'),
+        403: erro('Aula de outro instrutor'),
+        404: erro('Aula não encontrada'),
+      },
+    },
+  },
+
+  '/aulas/{id}/matriculas': {
+    get: {
+      tags: ['Matrículas'],
+      summary: 'Lista as matrículas de uma aula',
+      description: 'Somente o instrutor da aula ou admin.',
+      security: gestaoDaAula,
+      parameters: [idNoCaminho('id', 'ID da aula')],
+      responses: {
+        200: lista('MatriculaDaAula', 'Matrículas da aula'),
+        401: erro('Token ausente ou inválido'),
+        403: erro('Aula de outro instrutor'),
+        404: erro('Aula não encontrada'),
+      },
+    },
+    post: {
+      tags: ['Matrículas'],
+      summary: 'Matricula o aluno autenticado na aula',
+      description:
+        'O aluno vem do token — não há aluno_id no corpo. ' +
+        'Roda em transação com SELECT ... FOR UPDATE (parte 13).',
+      security: [{ bearerAuth: [] }],
+      parameters: [idNoCaminho('id', 'ID da aula')],
+      responses: {
+        201: json('Matricula', 'Matrícula criada'),
+        401: erro('Token ausente ou inválido'),
+        403: erro('Somente aluno pode se matricular'),
+        404: erro('Aula não encontrada'),
+        409: erro('Aula sem vagas (Regra 1) ou aluno já matriculado (Regra 2)'),
+      },
+    },
+  },
+
+  '/aulas/{id}/matriculas/{matriculaId}': {
+    patch: {
+      tags: ['Matrículas'],
+      summary: 'Cancela uma matrícula',
+      description:
+        'Cancelamento é mudança de status, nunca DELETE (Regra 4).',
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        idNoCaminho('id', 'ID da aula'),
+        idNoCaminho('matriculaId', 'ID da matrícula'),
+      ],
+      requestBody: corpo('CancelarMatricula'),
+      responses: {
+        200: json('Matricula', 'Matrícula cancelada'),
+        400: erro('Corpo ou ID inválido'),
+        401: erro('Token ausente ou inválido'),
+        403: erro('Matrícula de outro aluno'),
+        404: erro('Matrícula não encontrada'),
+      },
+    },
+  },
+};</code></pre>
+  <p>As matrículas ganharam a tag <code>Matrículas</code> mesmo morando em <code>docs/paths/aulas.js</code>. Tag é agrupamento de leitura, não de arquivo: quem abre a página procura "matrículas", não "aulas".</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">docs/paths/instrutores.js</span> — o último:</p>
+  </div>
+  <pre><code>const { listarInstrutoresQuerySchema } = require('../../schemas');
+const {
+  parametrosDeQuery,
+  corpo,
+  json,
+  paginado,
+  erro,
+  semConteudo,
+  idNoCaminho,
+} = require('../helpers');
+
+const somenteAdmin = [{ bearerAuth: [] }];
+
+module.exports = {
+  '/instrutores': {
+    get: {
+      tags: ['Instrutores'],
+      summary: 'Lista instrutores ativos',
+      description: 'Rota pública. Paginada, com filtro por nome e especialidade.',
+      parameters: parametrosDeQuery(listarInstrutoresQuerySchema),
+      responses: {
+        200: paginado('Instrutor', 'Página de instrutores'),
+        400: erro('Parâmetro de query inválido'),
+      },
+    },
+    post: {
+      tags: ['Instrutores'],
+      summary: 'Cadastra um instrutor',
+      description: 'Somente admin — instrutor não se autocadastra.',
+      security: somenteAdmin,
+      requestBody: corpo('CriarInstrutor'),
+      responses: {
+        201: json('Instrutor', 'Instrutor criado'),
+        400: erro('Corpo inválido'),
+        401: erro('Token ausente ou inválido'),
+        403: erro('Papel sem permissão'),
+      },
+    },
+  },
+
+  '/instrutores/{id}': {
+    get: {
+      tags: ['Instrutores'],
+      summary: 'Busca um instrutor',
+      parameters: [idNoCaminho('id', 'ID do instrutor')],
+      responses: {
+        200: json('Instrutor', 'Instrutor encontrado'),
+        400: erro('ID inválido'),
+        404: erro('Instrutor não encontrado'),
+      },
+    },
+    patch: {
+      tags: ['Instrutores'],
+      summary: 'Atualiza um instrutor',
+      security: somenteAdmin,
+      parameters: [idNoCaminho('id', 'ID do instrutor')],
+      requestBody: corpo('AtualizarInstrutor'),
+      responses: {
+        200: json('Instrutor', 'Instrutor atualizado'),
+        400: erro('Corpo ou ID inválido'),
+        401: erro('Token ausente ou inválido'),
+        403: erro('Papel sem permissão'),
+        404: erro('Instrutor não encontrado'),
+      },
+    },
+    delete: {
+      tags: ['Instrutores'],
+      summary: 'Desativa um instrutor (soft-delete da parte 15)',
+      security: somenteAdmin,
+      parameters: [idNoCaminho('id', 'ID do instrutor')],
+      responses: {
+        204: semConteudo('Instrutor desativado'),
+        401: erro('Token ausente ou inválido'),
+        403: erro('Papel sem permissão'),
+        404: erro('Instrutor não encontrado'),
+      },
+    },
+  },
+};</code></pre>
+  <div class="rule">
+    <span class="tag">Cada código de resposta veio de uma leitura do código</span>
+    <p>Nada dessa lista de <code>responses</code> é chute. Vale conferir a sua, rota por rota, contra o que <code>routes/</code> realmente faz — <code>grep -n "res.status" routes/*.js</code> mostra tudo em uma tela. Documentar um código que a rota não devolve é tão errado quanto omitir um que ela devolve.</p>
+  </div>
+
+  <h2 id="juntando">13. Juntando tudo no openapi.js</h2>
+  <p>Com <code>helpers</code>, <code>componentes</code> e os quatro módulos de <code>paths</code> prontos, o <code>docs/openapi.js</code> volta a ser o que deveria ser: só o esqueleto e a montagem.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">docs/openapi.js</span> — <strong>substitua o arquivo inteiro</strong> por isto. Tudo que saiu daqui (os ajudantes na seção 10, o <code>components</code> na seção 11) já está nos arquivos novos:</p>
+  </div>
+  <pre><code>const componentes = require('./componentes');
+
+const auth = require('./paths/auth');
+const alunos = require('./paths/alunos');
+const aulas = require('./paths/aulas');
+const instrutores = require('./paths/instrutores');
+
+module.exports = {
+  openapi: '3.0.3',
+  info: {
+    title: 'Studio Fit API',
+    version: '1.0.0',
+    description: 'API de agendamento de aulas de uma academia.',
+  },
+  servers: [{ url: 'http://localhost:3000', description: 'Desenvolvimento' }],
+  tags: [
+    { name: 'Autenticação' },
+    { name: 'Alunos' },
+    { name: 'Instrutores' },
+    { name: 'Aulas' },
+    { name: 'Matrículas' },
+  ],
+  components: componentes,
+  paths: { ...auth, ...alunos, ...aulas, ...instrutores },
+};</code></pre>
+  <p>Duas mudanças além da limpeza: a tag <code>Matrículas</code> entrou na lista (tag usada e não declarada some do agrupamento), e o <code>paths</code> é o espalhamento dos quatro módulos num objeto só. Como os caminhos não se repetem entre eles, o <code>...</code> basta — não há sobrescrita.</p>
+  <p>A árvore final de <code>docs/</code>:</p>
+  <pre><code>docs/
+├── openapi.js       # esqueleto e montagem
+├── componentes.js   # schemas de entrada (Zod) e de saída (à mão)
+├── helpers.js       # conversão e atalhos de resposta
+└── paths/
+    ├── auth.js
+    ├── alunos.js
+    ├── aulas.js
+    └── instrutores.js</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span> — a spec agora deve montar sozinha, antes mesmo de subir o servidor:</p>
+  </div>
+  <pre><code>node -pe "
+  const s = require('./docs/openapi');
+  const ops = Object.values(s.paths).reduce((n, p) => n + Object.keys(p).length, 0);
+  \`openapi \${s.openapi} | \${Object.keys(s.paths).length} paths | \${ops} operações | \${Object.keys(s.components.schemas).length} schemas\`"
+# openapi 3.0.3 | 12 paths | 20 operações | 16 schemas
+
+npm run lint
+# sem erros: os três no-unused-vars da seção 10 sumiram junto com o motivo deles</code></pre>
+
+  <h2 id="servindo">14. Servindo o Swagger UI</h2>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">app.js</span> — importe os dois no topo, junto dos <code>require</code> que já existem:</p>
+  </div>
+  <pre><code>const swaggerUi = require('swagger-ui-express');
+const openapi = require('./docs/openapi');</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">app.js</span> — monte as duas rotas <strong>antes</strong> dos routers da API:</p>
+  </div>
+  <pre><code>app.get('/docs.json', (req, res) => res.json(openapi));
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(openapi));
+
+<span class="ln-ctx">app.use('/alunos', alunosRouter);
+app.use('/instrutores', instrutoresRouter);</span></code></pre>
+  <p>Abra <code>http://localhost:3000/docs</code> e a página está lá: rotas agrupadas pelas tags, cada uma expansível, com os campos, os tipos e um botão <em>Try it out</em> que dispara a requisição de verdade contra o servidor de <code>servers</code>.</p>
+  <div class="rule">
+    <span class="tag">Isso deve ficar público?</span>
+    <p>Do jeito que está, qualquer um que alcance a API vê a documentação inteira. Para uma API pública, é o objetivo. Para uma API interna, é entregar o mapa da casa — inclusive os nomes dos campos e as regras de validação, que ajudam quem quer sondar.</p>
+    <p>As saídas usuais: servir <code>/docs</code> só fora de produção (<code>if (process.env.NODE_ENV !== 'production')</code>), ou protegê-la com autenticação. Nenhuma das duas cabe aqui como decisão definitiva, mas vale escolher conscientemente antes do deploy.</p>
+  </div>
+
+  <h2 id="helmet">15. O Swagger e o helmet</h2>
+  <p>A parte 9 avisou que o CSP do helmet costuma bloquear a interface do Swagger, porque ela dependeria de script e estilo inline. Vale corrigir esse aviso com o que realmente acontece na versão atual.</p>
+  <p>O <code>swagger-ui-express</code> 5 serve <strong>todos</strong> os assets como arquivos do mesmo domínio:</p>
+  <pre><code>src="./swagger-ui-bundle.js"
+src="./swagger-ui-standalone-preset.js"
+src="./swagger-ui-init.js"
+href="./swagger-ui.css"</code></pre>
+  <p>Não há <code>&lt;script&gt;</code> inline. Como o CSP padrão do helmet permite <code>script-src 'self'</code>, os arquivos carregam; e <code>style-src</code> já inclui <code>'unsafe-inline'</code> por padrão, o que cobre os estilos que a interface aplica em tempo de execução. Na prática, <strong>a página funciona sem mexer no helmet</strong>.</p>
+  <div class="callout">
+    <p>Se em alguma versão isso mudar, o sintoma é claro: a página abre em branco e o console do navegador mostra qual diretiva bloqueou. A correção é afrouxar o CSP <strong>só na rota da documentação</strong> — nunca desligar o helmet globalmente:</p>
+    <pre><code>app.use(
+  '/docs',
+  helmet({ contentSecurityPolicy: false }),
+  swaggerUi.serve,
+  swaggerUi.setup(openapi),
+);</code></pre>
+    <p>Aplicar helmet de novo numa rota específica sobrescreve os headers só ali. O resto da API continua com a política da parte 9.</p>
+  </div>
+
+  <h2 id="spec-json">16. Expondo a spec crua</h2>
+  <p>A rota <code>/docs.json</code> da seção 14 parece redundante — a página já mostra tudo. Ela existe porque a página é para humanos e o JSON é para ferramentas:</p>
+  <ul>
+    <li><strong>Importar no Postman ou Insomnia</strong> — cole a URL e a coleção inteira é criada.</li>
+    <li><strong>Gerar cliente</strong> — geradores consomem a spec para produzir código de cliente.</li>
+    <li><strong>Testes de contrato</strong> — uma ferramenta pode comparar as respostas reais com o que a spec promete.</li>
+    <li><strong>Versionar a spec</strong> — salvar o JSON num arquivo a cada release deixa o histórico de mudanças de contrato visível no <code>git diff</code>.</li>
+  </ul>
+
+  <h2 id="divergir">17. O risco de a doc mentir</h2>
+  <p>Documentação errada é pior que documentação ausente: sem doc, a pessoa lê o código; com doc errada, ela confia e erra. Derivar dos schemas resolve metade do problema — a metade dos formatos de entrada. O que continua escrito à mão pode divergir:</p>
+  <table>
+    <thead><tr><th>Parte da spec</th><th>Deriva do código?</th><th>Risco</th></tr></thead>
+    <tbody>
+      <tr><td>Formato do corpo da requisição</td><td><span class="badge badge-ok">sim</span></td><td>Nenhum — mudou o schema, mudou a doc.</td></tr>
+      <tr><td>Parâmetros de query</td><td><span class="badge badge-ok">sim</span></td><td>Nenhum, desde que o schema seja o mesmo objeto (seção 9).</td></tr>
+      <tr><td>Quem pode chamar (<code>security</code>)</td><td><span class="badge badge-err">não</span></td><td>Alto: a matriz da parte 10 e a spec podem discordar.</td></tr>
+      <tr><td>Códigos de resposta</td><td><span class="badge badge-err">não</span></td><td>Médio: uma rota nova que devolve <code>409</code> não documentado.</td></tr>
+      <tr><td>Formato da resposta</td><td><span class="badge badge-err">não</span></td><td>Alto: foi o que aconteceu três vezes nesta trilha, com as quebras de contrato das partes 8, 11 e 18.</td></tr>
+    </tbody>
+  </table>
+  <div class="rule">
+    <span class="tag">Listar os códigos revelou um bug</span>
+    <p>A seção 12 mandou conferir cada <code>responses</code> contra o que a rota faz. Fazendo isso em <code>POST /alunos</code>, aparece um buraco: a tabela <code>alunos</code> tem índice único em <code>email</code> (parte 3), o repository não trata o erro, e o <code>catch</code> genérico do <code>app.js</code> transforma tudo em <code>500</code>.</p>
+    <pre><code>curl -X POST localhost:3000/alunos -H 'Content-Type: application/json' \
+  -d '{"nome":"Dup","email":"ja@existe.com","data_nascimento":"1990-01-01","senha":"senha123"}'
+# 1ª vez: 201
+# 2ª vez: 500 — deveria ser 409</code></pre>
+    <p>O código certo é <code>409 Conflict</code>: o pedido é válido, o estado atual do servidor é que impede. É o mesmo tratamento que <code>POST /aulas/{id}/matriculas</code> já faz para matrícula duplicada (parte 6), capturando o <code>23505</code> do Postgres.</p>
+    <div class="edit-step">
+      <p><span class="action action-edit">Alterar</span> <span class="file">routes/alunos.js</span> — na rota <code>POST /</code>, envolva a criação num <code>try/catch</code> que traduz o <code>23505</code>:</p>
+    </div>
+    <pre><code><span class="ln-ctx">router.post('/', validar({ body: criarAlunoSchema }), async (req, res) => {
+  const { nome, email, data_nascimento, senha } = req.body;
+  const senha_hash = await hashSenha(senha);</span>
+
+<span class="ln-add">  try {                                            // NOVO</span>
+<span class="ln-ctx">    const alunoCriado = await alunosRepository.criar({
+      nome, email, data_nascimento, senha_hash,
+    });
+    const { senha_hash: _senhaHash, ...alunoSemSenha } = alunoCriado;
+    res.status(201).location(`/alunos/${alunoCriado.id}`).json(alunoSemSenha);</span>
+<span class="ln-add">  } catch (err) {                                  // NOVO
+    if (err.code === '23505') {
+      throw new ErroDeDominio('Já existe um aluno com esse email', 409);
+    }
+    throw err;
+  }                                                // NOVO</span>
+});</code></pre>
+    <p>O <code>ErroDeDominio</code> vem da parte 12 e precisa do <code>require</code> no topo do arquivo, se ainda não estiver lá. Feito isso, o <code>409</code> entra no <code>responses</code> de <code>POST /alunos</code> em <code>docs/paths/alunos.js</code>:</p>
+    <pre><code>      responses: {
+<span class="ln-ctx">        201: json('Aluno', 'Aluno criado (header Location aponta para ele)'),
+        400: erro('Corpo inválido'),</span>
+<span class="ln-add">        409: erro('Já existe um aluno com esse email'),   // NOVO</span>
+      },</code></pre>
+    <p>Esse é o ganho menos anunciado de documentar: escrever o contrato obriga a ler a API de fora, e coisas que ninguém tinha exercitado aparecem. O bug estava lá desde a parte 4.</p>
+  </div>
+  <div class="warn">
+    <p>A defesa contra isso não é disciplina, é <strong>teste</strong> — e a parte 16 deixou o mecanismo pronto. Um teste que compara a resposta real com o que a spec declara transforma "doc desatualizada" em build vermelho. É o passo natural depois desta parte, e o mesmo raciocínio de todas as automações da trilha: o que depende de alguém lembrar, uma hora é esquecido.</p>
+  </div>
+
+  <h2 id="testando">18. Testando</h2>
+  <pre><code># a spec é JSON válido e tem o que deveria
+curl -s http://localhost:3000/docs.json | node -pe "
+  const s = JSON.parse(require('fs').readFileSync(0));
+  const ops = Object.values(s.paths).reduce((n, p) => n + Object.keys(p).length, 0);
+  'openapi ' + s.openapi + ' | ' + Object.keys(s.paths).length + ' paths | ' + ops + ' operações'"
+# openapi 3.0.3 | 12 paths | 20 operações
+
+# a página carrega
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/docs/
+# 200
+
+# a interface recebeu a spec inteira, não só o título
+curl -s http://localhost:3000/docs/swagger-ui-init.js | grep -o '"summary"' | wc -l
+# 20</code></pre>
+  <p>Se o número de operações vier menor do que o esperado, o culpado quase sempre é um caminho repetido entre dois módulos de <code>paths</code>: o <code>...</code> da seção 13 faz o último sobrescrever o primeiro, sem avisar.</p>
+  <div class="callout">
+    <p>Contar operações mostra que a spec <em>montou</em>, não que ela está <em>correta</em>. Para isso existe um validador de verdade, que confere a spec inteira contra o padrão 3.0.3 — <code>$ref</code> apontando para schema inexistente, campo obrigatório faltando, tipo inválido:</p>
+    <pre><code>npm install --save-dev @apidevtools/swagger-parser
+
+node -e "
+  require('@apidevtools/swagger-parser')
+    .validate(require('./docs/openapi'))
+    .then((api) => console.log('spec válida:', api.info.title))
+    .catch((e) => { console.error(e.message); process.exit(1); })"
+# spec válida: Studio Fit API</code></pre>
+    <p>É a diferença entre "o Swagger UI abriu" e "a spec está correta". Um <code>$ref</code> com nome errado, por exemplo, passa despercebido na página (o campo simplesmente não aparece) e aqui vira <code>Missing $ref pointer "#/components/schemas/NaoExiste"</code>.</p>
+    <p>Rode isso num processo separado, como acima, e não dentro do <code>app.js</code>: o validador <strong>resolve os <code>$ref</code> no próprio objeto</strong>, substituindo cada referência pelo schema inteiro. Numa spec já servida, isso mudaria o que o <code>/docs.json</code> devolve.</p>
+  </div>
+  <p>Mas o teste que importa é no navegador. Abra <code>http://localhost:3000/docs</code> e:</p>
+  <ol>
+    <li>Confira se os cinco grupos aparecem — Autenticação, Alunos, Instrutores, Aulas, Matrículas — e se as rotas protegidas estão com cadeado.</li>
+    <li>Expanda <code>POST /alunos</code> e confira se os quatro campos aparecem com os limites da parte 12.</li>
+    <li>Clique em <em>Try it out</em>, preencha e execute — deve criar um aluno de verdade e devolver <code>201</code>.</li>
+    <li>Expanda <code>GET /alunos</code>: os cinco parâmetros de query devem estar lá, com <code>ordenar_por</code> como lista de opções.</li>
+    <li>Chame <code>GET /alunos</code> sem autorizar: <code>401</code>. Depois clique em <strong>Authorize</strong>, cole um access token de admin, e chame de novo: <code>200</code>.</li>
+    <li>Expanda <code>POST /aulas/{id}/matriculas</code> e confira que <strong>não há corpo</strong> — o aluno vem do token (parte 10). Se aparecer um campo <code>aluno_id</code>, a doc está descrevendo a API de antes da parte 7.</li>
+  </ol>
+  <div class="callout">
+    <p>O passo 4 é o que fecha a história das partes 7 a 11: a mesma sequência que você fazia com três comandos <code>curl</code> e uma variável de shell, agora num formulário. E o cadeado fechado nas rotas protegidas é a matriz de permissões da parte 10 virando interface.</p>
+  </div>
+  <p>Vale também rodar <code>npm test</code> e confirmar que a suíte continua verde — a spec não deveria afetar nenhuma rota, e é bom ter certeza de que o middleware novo não mudou a ordem de nada.</p>
+
+  <h2 id="erros-comuns">19. Erros comuns</h2>
+  <ol>
+    <li><strong>Escrever <code>open:</code> em vez de <code>openapi:</code></strong> — a página abre e mostra <em>"Unable to render this definition: The provided definition does not specify a valid version field"</em>. O Swagger UI procura a chave <code>openapi</code> na raiz para saber que versão da spec está lendo; sem ela, não renderiza nada. O <code>/docs.json</code> continua respondendo normalmente, o que faz o erro parecer ser da interface.</li>
+    <li><strong>Converter sem <code>io: 'input'</code></strong> — campos com <code>.default()</code> aparecem como obrigatórios, e a doc descreve uma exigência que não existe (seção 5).</li>
+    <li><strong>Redeclarar o schema de query dentro do <code>docs/</code></strong> — recria a divergência que derivar do Zod veio evitar. Mova o schema para <code>schemas/</code> e importe nos dois lugares (seção 9).</li>
+    <li><strong>Documentar rota protegida sem <code>security</code></strong> — o Swagger não manda o token, a chamada volta <code>401</code>, e parece bug da API.</li>
+    <li><strong>Desligar o helmet inteiro por causa do Swagger</strong> — se um dia precisar afrouxar, afrouxe só na rota da doc (seção 15).</li>
+    <li><strong>Deixar <code>servers</code> apontando para <code>localhost</code> em produção</strong> — o <em>Try it out</em> dispara contra a máquina de quem abriu a página, e a doc "não funciona" sem explicação.</li>
+    <li><strong>Expor <code>/docs</code> em produção sem pensar</strong> — pode ser o objetivo, ou pode ser entregar o mapa da API (seção 14).</li>
+    <li><strong>Confiar que <code>.refine()</code> foi convertido</strong> — regras que não cabem em JSON Schema são descartadas <em>em silêncio</em> na conversão (seção 11). Nenhum aviso, nenhum erro: a regra simplesmente não está na doc.</li>
+    <li><strong>Documentar só o caminho feliz</strong> — os erros são metade do contrato. Quem escreve o cliente precisa saber que existe <code>409</code> em matrícula duplicada.</li>
+    <li><strong>Confiar que a doc continua verdadeira</strong> — sem teste de contrato, ela envelhece igual ao <code>schema.sql</code> da parte 14 (seção 17).</li>
+  </ol>
+
+  <h2 id="proximos-passos">20. O que vem a seguir</h2>
+  <p>A categoria <strong>contrato da API</strong> fecha aqui. A API agora é consumível por quem não escreveu o código: paginação e filtros para lidar com volume (parte 18), e uma descrição navegável do contrato inteiro (esta).</p>
+  <p>Falta a última categoria, <strong>produção</strong> — e ela é a que transforma o projeto em algo que existe fora do seu computador:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Logging estruturado e health check</strong> — hoje o único registro é <code>console.error</code> no middleware de erro. Em produção, log precisa ser pesquisável (JSON, com request id) e o orquestrador precisa de uma rota que responda "estou vivo".</li>
+      <li><strong>Dockerfile do app</strong> — o Postgres roda em container desde a parte 1; a API, não. Empacotá-la é o que torna o deploy reproduzível.</li>
+      <li><strong>Deploy com HTTPS</strong> — variáveis de produção, banco gerenciado, migrations no processo de deploy (parte 14), e o momento em que <code>trust proxy</code> (parte 9) e <code>Secure</code> no cookie (parte 11) finalmente entram em ação.</li>
+    </ol>
+  </div>
+  <p>Se a última parte ficar densa demais, ela se divide em duas — empacotar e publicar são problemas diferentes.</p>
+
+  <footer class="closing">
+    <p>O momento que vale a pena nesta parte é o passo 4 da seção 18: autorizar com um token e ver o <code>401</code> virar <code>200</code> dentro da página. É a primeira vez que a API tem uma interface — e é a mesma que você vai usar para conferir cada resposta quando começar o front-end. Volta com dúvidas, principalmente se a página abrir em branco (olhe o console do navegador) ou se algum campo aparecer como obrigatório sem ser.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

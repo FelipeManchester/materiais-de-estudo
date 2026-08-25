@@ -179,7 +179,11 @@ module.exports = { criarAlunoSchema };</code></pre>
         });
       }
 
-      req[origem] = resultado.data;
+      Object.defineProperty(req, origem, {
+        value: resultado.data,
+        writable: true,
+        configurable: true,
+      });
     }
 
     next();
@@ -190,9 +194,13 @@ module.exports = validar;</code></pre>
   <p>Três decisões dentro dessas linhas:</p>
   <ul>
     <li><strong><code>safeParse</code>, não <code>parse</code>.</strong> O <code>parse</code> lança exceção; o <code>safeParse</code> devolve <code>{ success, data | error }</code>. Como o erro de validação é um caminho <em>esperado</em> — cliente errando é rotina, não excepcional — tratar por retorno fica mais direto do que por <code>try/catch</code>.</li>
-    <li><strong><code>req[origem] = resultado.data</code>.</strong> A linha mais importante e a mais fácil de esquecer: ela substitui o dado cru pelo dado <strong>validado e transformado</strong>. Sem ela, o <code>.trim()</code> e as conversões de tipo não chegam no handler, e o schema vira só um porteiro.</li>
+    <li><strong>O <code>Object.defineProperty</code>.</strong> A parte mais importante e a mais fácil de errar: ela substitui o dado cru pelo dado <strong>validado e transformado</strong>. Sem isso, o <code>.trim()</code> e as conversões de tipo não chegam no handler, e o schema vira só um porteiro. O aviso abaixo explica por que não é uma atribuição simples.</li>
     <li><strong>O laço nas três origens.</strong> <code>validar({ body: X })</code> valida só o body; <code>validar({ params: Y, body: X })</code> valida os dois. Uma rota que não passa <code>query</code> nem paga o custo.</li>
   </ul>
+  <div class="warn">
+    <p><strong>Por que <code>defineProperty</code> e não <code>req.query = ...</code>?</strong> Porque no Express 5 <code>req.query</code> é um <em>getter</em>: a atribuição direta não altera nada e <strong>não lança erro</strong>. O middleware continuaria validando e devolvendo <code>400</code> corretamente, mas o handler receberia o dado cru — sem os <code>.default(...)</code>, sem as coerções. Um bug que só aparece quando alguém lê <code>req.query.pagina</code> e encontra <code>undefined</code>.</p>
+    <p>Confirme você mesmo, num handler qualquer: <code>req.query = { teste: 1 }</code> seguido de <code>console.log(req.query)</code> imprime a query original. <code>Object.assign(req.query, ...)</code> também não resolve — o getter devolve outro objeto. Para <code>body</code> e <code>params</code> a atribuição simples funcionaria; usar <code>defineProperty</code> nos três mantém uma regra só.</p>
+  </div>
   <div class="callout">
     <p><code>problema.path.join('.')</code> monta o nome do campo — <code>['email']</code> vira <code>"email"</code>. Quando o erro é do objeto inteiro (seção 11), <code>path</code> vem vazio e o <code>|| origem</code> entra como reserva, resultando em <code>"body"</code>.</p>
   </div>
@@ -733,7 +741,7 @@ curl -s -X POST http://localhost:3000/aulas/ID_DA_AULA/matriculas \
 
   <h2 id="erros-comuns">15. Erros comuns</h2>
   <ol>
-    <li><strong>Esquecer <code>req[origem] = resultado.data</code></strong> — a validação funciona, mas o handler recebe o dado cru: sem <code>trim</code>, sem conversão de tipo. O sintoma é sutil, porque nada dá erro.</li>
+    <li><strong>Usar <code>req[origem] = resultado.data</code> em vez de <code>defineProperty</code></strong> — funciona para <code>body</code> e <code>params</code>, e <strong>falha em silêncio</strong> para <code>query</code>: a validação acontece, o <code>400</code> funciona, mas defaults e coerções não chegam no handler (ver aviso da seção 7).</li>
     <li><strong>Validar antes de autenticar</strong> — a ordem correta é <code>autenticar, autorizar, validar</code>. Invertida, um estranho descobre o formato dos seus dados internos (seção 9).</li>
     <li><strong><code>z.coerce.number()</code> aceita string vazia</strong> — <code>Number("")</code> é <code>0</code>, então <code>""</code> vira <code>0</code> e passa. Por isso os schemas usam <code>.positive()</code> junto: sozinha, a coerção é mais permissiva do que parece.</li>
     <li><strong>Usar <code>strictObject</code> na query</strong> — qualquer <code>?utm_source=...</code> de link compartilhado vira <code>400</code> (seção 12).</li>
@@ -754,7 +762,7 @@ curl -s -X POST http://localhost:3000/aulas/ID_DA_AULA/matriculas \
   <p>Fica registrado como dívida consciente: os <code>return res.status(...)</code> antigos continuam espalhados pelas rotas (seção 13), convertidos para <code>ErroDeDominio</code> só quando você estiver mexendo neles por outro motivo.</p>
 
   <footer class="closing">
-    <p>Ao testar, o mais satisfatório é repetir a tabela da seção 1 e ver cada <code>500</code> virar <code>400</code> com mensagem que explica o problema. Preste atenção especial no <code>trim</code> chegando no banco e na coerção de <code>"1"</code> pra <code>1</code> — são as duas transformações que provam que o <code>req[origem] = resultado.data</code> está no lugar. Volta com dúvidas, principalmente se alguma rota começar a responder <code>400</code> pra requisição que você considera válida.</p>
+    <p>Ao testar, o mais satisfatório é repetir a tabela da seção 1 e ver cada <code>500</code> virar <code>400</code> com mensagem que explica o problema. Preste atenção especial no <code>trim</code> chegando no banco e na coerção de <code>"1"</code> pra <code>1</code> — são as duas transformações que provam que a escrita de volta está no lugar. Volta com dúvidas, principalmente se alguma rota começar a responder <code>400</code> pra requisição que você considera válida.</p>
   </footer>
 </main>
 

@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Integração contínua</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="16-testes-automatizados.html">&larr; 16. Testes automatizados</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-problema">1. O teste que ninguém roda</a></li>
+    <li><a href="#o-que-e">2. O que é CI</a></li>
+    <li><a href="#anatomia">3. Anatomia de um workflow</a></li>
+    <li><a href="#postgres-servico">4. Postgres como serviço do job</a></li>
+    <li><a href="#credenciais">5. As credenciais precisam bater</a></li>
+    <li><a href="#arquivo">6. O arquivo ci.yml</a></li>
+    <li><a href="#npm-ci">7. npm ci, não npm install</a></li>
+    <li><a href="#quando-roda">8. Quando o workflow roda</a></li>
+    <li><a href="#publicando">9. Publicando o projeto no GitHub</a></li>
+    <li><a href="#lendo">10. Lendo o resultado</a></li>
+    <li><a href="#portao">11. De aviso a portão</a></li>
+    <li><a href="#cache">12. Cache de dependências</a></li>
+    <li><a href="#depois">13. O que entra no CI depois</a></li>
+    <li><a href="#erros-comuns">14. Erros comuns</a></li>
+    <li><a href="#proximos-passos">15. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="18-paginacao-filtro-ordenacao.html">18. Paginação, filtro e ordenação &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 17</div>
+  <h1>Integração contínua</h1>
+  <p class="subtitle">A parte 16 transformou meia hora de <code>curl</code> num comando. Só que comando ainda depende de alguém digitar — e quem está com pressa não digita. Esta parte tira essa decisão da sua mão: os testes passam a rodar sozinhos, num computador que não é o seu, toda vez que o código muda.</p>
+
+  <h2 id="o-problema">1. O teste que ninguém roda</h2>
+  <p>Suíte de testes tem um problema conhecido: ela protege exatamente na hora em que você menos quer esperar. Numa sexta-feira, com uma correção de uma linha, "é óbvio que não quebrou nada" é o pensamento que precede o commit que quebra tudo.</p>
+  <p>E há um segundo problema, mais silencioso: <strong>testes passam na sua máquina por motivos que não existem em outro lugar</strong>. O banco que você criou na mão meses atrás, o pacote instalado globalmente, a variável exportada naquele terminal específico. A parte 16 já mostrou uma versão disso — o <code>globalSetup</code> com nome errado não rodava, e a suíte passava mesmo assim porque o banco de teste já existia de antes.</p>
+  <div class="callout">
+    <p>CI resolve os dois de uma vez: roda <strong>sempre</strong>, sem depender de disciplina, e roda numa máquina <strong>limpa</strong>, que só tem o que está no repositório. Se o projeto não sobe lá, ele não sobe na máquina de mais ninguém — inclusive no servidor de produção.</p>
+  </div>
+
+  <h2 id="o-que-e">2. O que é CI</h2>
+  <p><strong>Integração contínua</strong> é a prática de integrar o trabalho no ramo principal com frequência, com verificação automática a cada integração. Na prática, para este projeto, significa: a cada <code>push</code>, um servidor baixa o código, instala as dependências do zero, sobe um Postgres, roda as migrations, roda o lint e roda os testes — e avisa se algo falhar.</p>
+  <p><strong>GitHub Actions</strong> é o serviço de CI embutido no GitHub. A escolha aqui é por conveniência: o código já vai estar lá, não exige cadastro em outro serviço, e é gratuito para repositório público. As alternativas (GitLab CI, CircleCI, Jenkins) resolvem o mesmo problema com outra sintaxe — o que você aprende aqui transfere.</p>
+
+  <h2 id="anatomia">3. Anatomia de um workflow</h2>
+  <p>A configuração é um arquivo YAML dentro de <code>.github/workflows/</code>. O vocabulário:</p>
+  <table>
+    <thead><tr><th>Termo</th><th>O que é</th></tr></thead>
+    <tbody>
+      <tr><td><strong>workflow</strong></td><td>O arquivo inteiro. Tem um gatilho (<code>on</code>) e um ou mais jobs.</td></tr>
+      <tr><td><strong>job</strong></td><td>Um conjunto de passos que roda numa máquina própria. Jobs diferentes rodam em paralelo, em máquinas separadas.</td></tr>
+      <tr><td><strong>runner</strong></td><td>A máquina virtual que executa o job — <code>ubuntu-latest</code>, criada do zero e destruída no fim.</td></tr>
+      <tr><td><strong>step</strong></td><td>Um passo: rodar um comando (<code>run</code>) ou usar uma ação pronta (<code>uses</code>).</td></tr>
+      <tr><td><strong>action</strong></td><td>Um pedaço reutilizável, publicado por alguém. <code>actions/checkout</code> baixa seu código; <code>actions/setup-node</code> instala o Node.</td></tr>
+      <tr><td><strong>service</strong></td><td>Um container que sobe ao lado do job e vive enquanto ele durar. É como o Postgres entra (seção 4).</td></tr>
+    </tbody>
+  </table>
+  <p>A máquina começa <strong>vazia</strong> a cada execução: sem seu <code>node_modules</code>, sem seu banco, sem seu <code>.env</code>. Tudo que o job precisa tem que estar no repositório ou ser criado por ele. É essa a propriedade que faz o CI valer a pena.</p>
+
+  <h2 id="postgres-servico">4. Postgres como serviço do job</h2>
+  <p>Os testes da parte 16 precisam de um Postgres de verdade. No runner ele sobe como <em>service container</em> — a mesma imagem do seu <code>docker-compose.yml</code>, declarada dentro do job:</p>
+  <pre><code>services:
+  postgres:
+    image: postgres:16
+    env:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: senha123
+    ports:
+      - 5432:5432
+    options: &gt;-
+      --health-cmd pg_isready
+      --health-interval 10s
+      --health-timeout 5s
+      --health-retries 5</code></pre>
+  <div class="warn">
+    <p>O bloco <code>options</code> com <code>--health-cmd</code> não é opcional. Sem ele, o GitHub considera o serviço pronto assim que o container <em>inicia</em> — mas o Postgres leva alguns segundos entre iniciar e aceitar conexão. O job começaria a rodar os testes contra um banco que ainda não responde, e a falha seria <code>ECONNREFUSED</code> de forma intermitente: passa às vezes, falha às vezes, dependendo de quão rápido o runner estava naquele dia.</p>
+    <p>Com o <em>health check</em>, o GitHub espera o <code>pg_isready</code> responder antes de começar os passos. É a diferença entre um CI confiável e um que "às vezes falha, roda de novo que passa" — o pior estado possível, porque ensina o time a ignorar falha vermelha.</p>
+  </div>
+  <p>Note que a versão é a mesma do seu <code>docker-compose.yml</code> (<code>postgres:16</code>). Testar contra uma versão diferente da que você usa é procurar surpresa: cada versão maior muda comportamento em detalhes que a sua aplicação pode depender.</p>
+
+  <h2 id="credenciais">5. As credenciais precisam bater</h2>
+  <p>Aqui tem uma sutileza que decorre direto da parte 16. O <code>tests/setup.js</code> e o <code>globalSetup</code> carregam o <code>.env.test</code> com <code>override: true</code> — ou seja, <strong>o arquivo vence qualquer variável definida no ambiente</strong>. Isso foi decisão consciente lá (evita que uma variável esquecida no terminal aponte os testes pro banco errado), e tem uma consequência aqui: não adianta o workflow definir <code>DATABASE_URL</code>, porque o <code>.env.test</code> vai sobrescrever.</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Tentativa natural</h4>
+      <p>Definir <code>DATABASE_URL</code> como variável do job, apontando pro serviço. <strong>Não funciona</strong>: o <code>override: true</code> descarta e usa o do arquivo.</p>
+    </div>
+    <div class="good">
+      <h4>O que fazemos</h4>
+      <p>Configurar o serviço Postgres com <strong>as mesmas credenciais</strong> que estão no <code>.env.test</code>. O arquivo é a fonte da verdade nos dois ambientes.</p>
+    </div>
+  </div>
+  <p>Por isso o <code>POSTGRES_PASSWORD</code> do serviço precisa ser a senha que está no seu <code>.env.test</code>, e o host tem que ser <code>localhost:5432</code> — que é como o runner enxerga o serviço, graças ao <code>ports: 5432:5432</code>.</p>
+  <div class="rule">
+    <span class="tag">Isso não é vazar senha?</span>
+    <p>Não, e vale entender por quê. A senha do <code>.env.test</code> não protege nada: ela dá acesso a um Postgres efêmero, que existe por 60 segundos dentro de um runner descartável, com dados gerados pelo próprio teste. O mesmo vale pro <code>JWT_SECRET</code> de teste.</p>
+    <p>Segredo de verdade — senha do banco de produção, chave de API — <strong>nunca</strong> entra em arquivo versionado. Esses vão em <em>GitHub Secrets</em>, referenciados como <code>${{ secrets.NOME }}</code>, e aparecem mascarados no log. Isso entra na parte de deploy; aqui não há nenhum segredo real envolvido.</p>
+  </div>
+
+  <h2 id="arquivo">6. O arquivo ci.yml</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">.github/workflows/ci.yml</span> — dois diretórios novos, e o nome do arquivo pode ser qualquer um; o que importa é o caminho <code>.github/workflows/</code>. Troque <code>senha123</code> pela senha que está no seu <code>.env.test</code>:</p>
+  </div>
+  <pre><code>name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: senha123
+        ports:
+          - 5432:5432
+        options: &gt;-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v6
+
+      - name: Instalar o Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Testes
+        run: npm test</code></pre>
+  <p>Passo por passo, o que cada um faz e por quê:</p>
+  <table>
+    <thead><tr><th>Passo</th><th>Por que existe</th></tr></thead>
+    <tbody>
+      <tr><td><code>actions/checkout</code></td><td>O runner começa vazio — sem isso, não há código nenhum na máquina.</td></tr>
+      <tr><td><code>actions/setup-node</code></td><td>Instala a versão de Node que você especificar. Use a mesma que você roda localmente (<code>node -v</code>), senão o CI testa uma aplicação diferente da sua.</td></tr>
+      <tr><td><code>npm ci</code></td><td>Instala as dependências (seção 7).</td></tr>
+      <tr><td><code>npm run lint</code></td><td>Antes dos testes de propósito: é mais rápido, e falha de lint não precisa esperar o banco.</td></tr>
+      <tr><td><code>npm test</code></td><td>O <code>globalSetup</code> da parte 16 cria o banco <code>estudo_test</code> e roda as migrations sozinho — nada disso precisa aparecer no workflow.</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <p>Repare no que <strong>não</strong> está no arquivo: nenhum passo criando banco, aplicando migrations ou preparando dado. Tudo isso já é responsabilidade do <code>globalSetup</code>, escrito na parte 16 para rodar na sua máquina. Um CI que precisa de preparo próprio é um CI que testa um cenário diferente do seu — e a versão dele sempre atrasa em relação ao projeto.</p>
+  </div>
+
+  <h2 id="npm-ci">7. npm ci, não npm install</h2>
+  <table>
+    <thead><tr><th></th><th><code>npm install</code></th><th><code>npm ci</code></th></tr></thead>
+    <tbody>
+      <tr><td>Fonte da verdade</td><td><code>package.json</code> — pode instalar versão mais nova compatível e <strong>alterar</strong> o <code>package-lock.json</code>.</td><td><code>package-lock.json</code> — instala exatamente as versões travadas.</td></tr>
+      <tr><td><code>node_modules</code> existente</td><td>Aproveita o que já tem.</td><td>Apaga e instala do zero.</td></tr>
+      <tr><td>Se o lock estiver dessincronizado</td><td>Conserta em silêncio.</td><td><strong>Falha</strong>.</td></tr>
+    </tbody>
+  </table>
+  <p>Num CI você quer o segundo comportamento nos três pontos. Se <code>npm install</code> puxasse uma versão nova de uma dependência, o teste que falhou (ou passou) não corresponderia ao código que você commitou — e a próxima execução poderia dar outro resultado, sem nada ter mudado no repositório.</p>
+  <p>O <code>npm ci</code> falhando por lock dessincronizado também é feature: significa que alguém instalou um pacote e commitou o <code>package.json</code> sem o <code>package-lock.json</code>. Melhor descobrir no CI do que em produção.</p>
+
+  <h2 id="quando-roda">8. Quando o workflow roda</h2>
+  <pre><code>on:
+  push:
+    branches: [main]
+  pull_request:</code></pre>
+  <p>Duas situações, com propósitos diferentes:</p>
+  <ul>
+    <li><strong><code>push</code> na <code>main</code></strong> — verifica o que já está no ramo principal. É a rede de segurança de quem commita direto na <code>main</code>, que provavelmente é o seu caso agora.</li>
+    <li><strong><code>pull_request</code></strong> — verifica a proposta <em>antes</em> de ela entrar. Sem filtro de branch, vale pra PR aberto contra qualquer ramo.</li>
+  </ul>
+  <p>O segundo é onde o CI muda o jogo: o resultado aparece dentro do PR, e dá pra exigir que ele esteja verde antes do merge (seção 11).</p>
+
+  <h2 id="publicando">9. Publicando o projeto no GitHub</h2>
+  <p>GitHub Actions só existe dentro do GitHub — se o seu projeto ainda é um repositório local, ele precisa subir. Confira:</p>
+  <pre><code>git remote -v
+# sem saída = ainda não tem remote</code></pre>
+  <div class="warn">
+    <p>Antes do primeiro <code>push</code>, confira o <code>.gitignore</code>. O <code>.env</code> (com a senha real do seu banco e o <code>JWT_SECRET</code> de verdade) <strong>não pode</strong> ir junto. Rode <code>git status</code> e confirme que ele não aparece na lista.</p>
+    <p>Repare que <code>.env.test</code> <strong>deve</strong> ir — é ele que o CI usa (seção 5). Se o seu <code>.gitignore</code> tiver <code>.env*</code> em vez de <code>.env</code>, o arquivo de teste vai junto no bloqueio e o CI vai falhar sem explicação óbvia.</p>
+  </div>
+  <p>Crie o repositório no GitHub (pela interface web ou pelo <code>gh repo create</code>), e conecte:</p>
+  <pre><code>git remote add origin https://github.com/SEU_USUARIO/apirest-node-express.git
+git add .
+git commit -m "feat: adiciona CI com GitHub Actions"
+git push -u origin main</code></pre>
+  <p>Assim que o push terminar, a aba <strong>Actions</strong> do repositório mostra a execução começando.</p>
+
+  <h2 id="lendo">10. Lendo o resultado</h2>
+  <p>Cada execução vira uma linha na aba Actions, com o nome do commit e um ícone: amarelo rodando, verde passou, vermelho falhou. Clicando, você vê os passos, e clicando num passo, a saída dele — a mesma que apareceria no seu terminal.</p>
+  <p>É por isso que vale rodar <code>npm test</code> localmente antes de empurrar: a saída é idêntica, e depurar no seu terminal é mais rápido do que esperar 40 segundos por execução.</p>
+  <div class="rule">
+    <span class="tag">Falhou no CI e passa localmente. E agora?</span>
+    <p>Essa é a situação mais informativa que o CI produz, porque a diferença entre os dois ambientes <em>é</em> o bug. As causas mais comuns, em ordem:</p>
+    <ul>
+      <li><strong>Arquivo não commitado.</strong> Funciona na sua máquina porque existe só lá. <code>git status</code> responde.</li>
+      <li><strong>Dependência instalada e não salva no <code>package.json</code>.</strong> O <code>npm ci</code> na máquina limpa não a instala.</li>
+      <li><strong>Estado de banco acumulado.</strong> O seu banco de teste tem dados de execuções anteriores; o do CI nasce vazio. Um teste que depende de dado prévio só passa na sua máquina.</li>
+      <li><strong>Ordem ou paralelismo.</strong> Testes que dependem uns dos outros passam na ordem em que você roda e falham em outra.</li>
+    </ul>
+    <p>Todas essas são bugs de verdade — o CI não é chato, ele é o primeiro ambiente honesto em que o projeto rodou.</p>
+  </div>
+
+  <h2 id="portao">11. De aviso a portão</h2>
+  <p>Do jeito que está, o CI <em>avisa</em>: fica vermelho e a vida continua. Para virar portão, o GitHub tem <strong>branch protection</strong> — em <em>Settings → Branches → Add rule</em>, na branch <code>main</code>, marcando "Require status checks to pass before merging" e selecionando o job <code>testes</code>.</p>
+  <p>Com isso, um PR com teste falhando não pode ser mesclado. O botão de merge fica bloqueado.</p>
+  <div class="callout">
+    <p>Num projeto solo isso parece burocracia — e é, se você continuar commitando direto na <code>main</code>, porque a regra só age sobre PRs. O ganho aparece quando você adota o fluxo de branch + PR, mesmo trabalhando sozinho: cada mudança vira uma proposta que precisa passar na verificação antes de entrar. É um hábito barato de adquirir agora e caro de adquirir depois, com outras pessoas no repositório.</p>
+  </div>
+
+  <h2 id="cache">12. Cache de dependências</h2>
+  <p>A linha <code>cache: npm</code> no <code>setup-node</code> guarda o diretório de cache do npm entre execuções, usando o <code>package-lock.json</code> como chave. Quando o lock não muda, o <code>npm ci</code> não precisa baixar tudo de novo.</p>
+  <p>Repare que ele cacheia o <strong>cache do npm</strong>, não o <code>node_modules</code>. A instalação ainda acontece a cada execução — o que some é o download. Isso é proposital: cachear <code>node_modules</code> traria de volta o problema que o <code>npm ci</code> resolve, com a máquina reaproveitando estado antigo.</p>
+
+  <h2 id="depois">13. O que entra no CI depois</h2>
+  <p>O workflow desta parte faz o essencial. Coisas que costumam entrar depois, quando o projeto pede:</p>
+  <table>
+    <thead><tr><th>Passo</th><th>Quando faz sentido</th></tr></thead>
+    <tbody>
+      <tr><td><code>npm audit</code> ou Dependabot</td><td>Alerta de vulnerabilidade conhecida nas dependências. O Dependabot é gratuito e abre PRs sozinho.</td></tr>
+      <tr><td>Matriz de versões do Node</td><td>Rodar em Node 22 e 24 ao mesmo tempo, com <code>strategy.matrix</code>. Útil pra biblioteca; pra API que você controla o ambiente, é gasto sem retorno.</td></tr>
+      <tr><td>Build da imagem Docker</td><td>Quando existir <code>Dockerfile</code> (parte de produção): garante que a imagem constrói antes do deploy tentar.</td></tr>
+      <tr><td>Deploy automático</td><td>O passo seguinte natural: CI verde na <code>main</code> dispara o deploy. Aí "integração contínua" vira "entrega contínua".</td></tr>
+      <tr><td>Cobertura de testes</td><td><code>jest --coverage</code> com relatório publicado. Bom como mapa, ruim como meta (parte 16).</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="erros-comuns">14. Erros comuns</h2>
+  <ol>
+    <li><strong>Esquecer o <em>health check</em> do Postgres</strong> — falha intermitente com <code>ECONNREFUSED</code>, que "some" ao rodar de novo. É o pior tipo de falha de CI, porque ensina a ignorar o vermelho (seção 4).</li>
+    <li><strong>Senha do serviço diferente da do <code>.env.test</code></strong> — como o <code>override: true</code> faz o arquivo vencer, o teste tenta autenticar com a senha do arquivo e leva <code>password authentication failed</code> (seção 5).</li>
+    <li><strong><code>.gitignore</code> com <code>.env*</code></strong> — bloqueia o <code>.env.test</code> junto, e o CI falha sem <code>DATABASE_URL</code>. O padrão do projeto é <code>.env</code>, sem asterisco.</li>
+    <li><strong>Commitar o <code>.env</code> de verdade</strong> — o erro inverso, e muito pior. Senha de banco e <code>JWT_SECRET</code> ficam no histórico do git para sempre; remover exige reescrever a história e trocar os segredos.</li>
+    <li><strong><code>npm install</code> no lugar de <code>npm ci</code></strong> — o CI deixa de testar as versões que você travou (seção 7).</li>
+    <li><strong>Versão de Node diferente da local</strong> — o CI testa uma aplicação que não é a sua, e a diferença aparece no pior momento.</li>
+    <li><strong>Ignorar o vermelho "porque é coisa do CI"</strong> — quase sempre é bug de verdade que a sua máquina esconde (seção 10).</li>
+    <li><strong>Colocar segredo de produção no YAML</strong> — arquivo de workflow é versionado e público em repositório público. Segredo vai em <em>GitHub Secrets</em>.</li>
+  </ol>
+
+  <h2 id="proximos-passos">15. O que vem a seguir</h2>
+  <p>A categoria <strong>qualidade</strong> fecha aqui: existe suíte de testes (parte 16) e ela roda sozinha, numa máquina limpa, a cada mudança. Isso muda o resto da trilha — daqui pra frente, cada parte nova pode acrescentar testes, e a verificação de que nada quebrou deixa de depender de alguém lembrar.</p>
+  <p>A próxima categoria é <strong>contrato da API</strong>, e ela trata do que falta para outra pessoa conseguir consumir o que você construiu:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Paginação, filtro e ordenação</strong> — a próxima parte. <code>GET /alunos</code> devolve a tabela inteira: com 111 alunos ainda funciona, com 100 mil derruba a resposta. A parte 3 da trilha API REST já ensinou as convenções (<code>?page</code>, <code>?limit</code>, <code>?ordenar_por</code>); falta implementá-las — e agora com o middleware <code>validar</code> da parte 12 pronto para receber os parâmetros de query.</li>
+      <li><strong>Documentação OpenAPI</strong> — a especificação do contrato e o Swagger UI. Boa parte do trabalho já existe: os schemas Zod da parte 12 descrevem a entrada de cada rota, e há como derivar a documentação deles em vez de escrever tudo de novo.</li>
+    </ol>
+  </div>
+  <p>Depois disso, só falta <strong>produção</strong>: logging estruturado e health check, Dockerfile do app, e o deploy com HTTPS — onde o <code>trust proxy</code> da parte 9, o <code>Secure</code> do cookie da parte 11 e o passo de migrations da parte 14 finalmente entram em ação.</p>
+
+  <footer class="closing">
+    <p>Quando o primeiro workflow ficar verde, abra a aba Actions e leia a saída do passo de testes: é a mesma que você vê no terminal, rodando numa máquina que nunca viu o seu projeto antes. Volta com dúvidas, principalmente se algo passar localmente e falhar lá — essa diferença quase sempre aponta um arquivo não commitado ou um estado de banco que só existe na sua máquina.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

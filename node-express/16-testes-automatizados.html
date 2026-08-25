@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Testes automatizados</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="15-soft-delete-e-limpeza.html">&larr; 15. Soft-delete e limpeza</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-custo">1. O custo de testar na mão</a></li>
+    <li><a href="#que-tipo">2. Que tipo de teste vamos escrever</a></li>
+    <li><a href="#ferramentas">3. Jest e supertest</a></li>
+    <li><a href="#app-separado">4. O obstáculo: separar app de index</a></li>
+    <li><a href="#banco-de-teste">5. Um banco só pros testes</a></li>
+    <li><a href="#guarda">6. A guarda que evita o desastre</a></li>
+    <li><a href="#global-setup">7. globalSetup: banco limpo por execução</a></li>
+    <li><a href="#env-test">8. .env.test e a ordem de carregamento</a></li>
+    <li><a href="#primeiro-teste">9. O primeiro teste</a></li>
+    <li><a href="#ajudantes">10. Ajudantes: chegar rápido no que importa</a></li>
+    <li><a href="#testando-autorizacao">11. Testando a matriz de permissões</a></li>
+    <li><a href="#testando-regras">12. Testando as regras de negócio</a></li>
+    <li><a href="#testando-refresh">13. Testando o fluxo de refresh</a></li>
+    <li><a href="#obstaculos">14. Obstáculos que a própria API cria</a></li>
+    <li><a href="#erros-comuns">15. Erros comuns</a></li>
+    <li><a href="#proximos-passos">16. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="17-integracao-continua.html">17. Integração contínua &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 16</div>
+  <h1>Testes automatizados</h1>
+  <p class="subtitle">Quinze partes, todas testadas com <code>curl</code> na mão. Funcionou enquanto o projeto era pequeno — hoje conferir tudo depois de uma mudança é meia hora de terminal, e é por isso que ninguém confere. Esta parte troca isso por um comando.</p>
+
+  <h2 id="o-custo">1. O custo de testar na mão</h2>
+  <p>Faça a conta do que a trilha acumulou de comportamento que precisa continuar funcionando:</p>
+  <table>
+    <thead><tr><th>Origem</th><th>Casos</th></tr></thead>
+    <tbody>
+      <tr><td>4 regras de negócio (partes 5 e 6)</td><td>capacidade, duplicidade, conflito de agenda, cancelamento</td></tr>
+      <tr><td>Matriz de permissões (parte 10)</td><td>10 linhas × 4 papéis, mais posse de recurso</td></tr>
+      <tr><td>Fluxo de autenticação (partes 7, 8, 11)</td><td>login, refresh, logout, reuso, expiração, cookie</td></tr>
+      <tr><td>Validação (parte 12)</td><td>cada campo de cada schema</td></tr>
+      <tr><td>Concorrência (parte 13)</td><td>capacidade sob requisições simultâneas</td></tr>
+    </tbody>
+  </table>
+  <p>São dezenas de comportamentos. Você conferiu todos eles, várias vezes, colando comandos no terminal. E mesmo assim, três coisas escaparam ao longo da trilha e só foram descobertas depois: o login de instrutor que devolvia <code>400</code> sempre, o <code>PATCH</code>/<code>DELETE</code> de aulas respondendo <code>500</code>, e o filtro <code>?instrutor_id=</code> que parou de funcionar em silêncio.</p>
+  <div class="warn">
+    <p>Repare no padrão dos três: <strong>nenhum deles estava na parte que você tinha acabado de escrever</strong>. Eram comportamentos antigos, que funcionavam, e quebraram por causa de uma mudança em outro lugar. É exatamente o que teste automatizado pega e teste manual não: você reconfere o que mexeu, não o que já estava pronto.</p>
+  </div>
+  <p>O objetivo aqui não é cobrir 100% do código — é transformar aquela meia hora de terminal em <code>npm test</code>, para que reconferir tudo deixe de ser uma decisão e passe a ser o padrão.</p>
+
+  <h2 id="que-tipo">2. Que tipo de teste vamos escrever</h2>
+  <p>A divisão clássica separa testes por escopo:</p>
+  <table>
+    <thead><tr><th>Tipo</th><th>O que testa</th><th>Aqui</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Unitário</strong></td><td>Uma função isolada, sem banco nem rede.</td><td>Pouco a ganhar: nossas funções puras são poucas (<code>hashRefreshToken</code>, <code>calcularExpiracao</code>). A lógica de verdade está na conversa entre rota, repository e banco.</td></tr>
+      <tr><td><strong>Integração / API</strong> <span class="badge badge-ok">escolhido</span></td><td>Uma requisição HTTP de verdade, atravessando middlewares, rota, repository e Postgres.</td><td>É o que descreve o comportamento que importa: "aluno não matricula em aula lotada" é uma frase sobre a API, não sobre uma função.</td></tr>
+      <tr><td><strong>End-to-end</strong></td><td>Navegador + front-end + API.</td><td>Não existe front-end neste projeto.</td></tr>
+    </tbody>
+  </table>
+  <p>A escolha tem uma consequência importante: os testes vão usar <strong>banco de verdade</strong>, não simulado. Isso é deliberado — metade das garantias do projeto está no banco (o <code>UNIQUE</code> parcial da parte 3, o <code>CHECK</code> da parte 10, o <code>FOR UPDATE</code> da parte 13). Testar contra um banco falso testaria uma aplicação que não existe.</p>
+  <div class="rule">
+    <span class="tag">O custo dessa escolha</span>
+    <p>Testes com banco são mais lentos (segundos, não milissegundos) e exigem infraestrutura — o Postgres precisa estar de pé pra suíte rodar, inclusive no CI. Em troca, quando eles passam, você sabe que a API funciona de verdade. Um teste unitário que simula o Postgres passa mesmo quando a query está errada.</p>
+    <p>Como nosso Postgres já roda em Docker desde a parte 1, o custo aqui é baixo.</p>
+  </div>
+
+  <h2 id="ferramentas">3. Jest e supertest</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span> na raiz do projeto — as duas são de desenvolvimento, não vão pra produção:</p>
+  </div>
+  <pre><code>npm install --save-dev jest supertest</code></pre>
+  <table>
+    <thead><tr><th>Pacote</th><th>Papel</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Jest</strong></td><td>O executor: encontra os arquivos de teste, roda, isola cada arquivo num processo próprio e reporta o resultado. Traz junto as funções <code>describe</code>, <code>it</code> e <code>expect</code>.</td></tr>
+      <tr><td><strong>supertest</strong></td><td>Faz requisições HTTP contra o seu app Express <strong>sem subir servidor</strong>. Ele mesmo sobe a aplicação numa porta efêmera, faz a chamada e devolve a resposta.</td></tr>
+    </tbody>
+  </table>
+  <p>Esse "sem subir servidor" é o que torna a suíte rápida e independente: nada de precisar do <code>npm run dev</code> rodando em outro terminal, nada de porta ocupada, nada de teste falhando porque você esqueceu de reiniciar depois de editar.</p>
+  <p>Falta um ajuste antes de escrever o primeiro teste. O Jest injeta <code>describe</code>, <code>it</code>, <code>expect</code> e <code>afterAll</code> em tempo de execução — o ESLint não sabe disso e vai acusar cada um deles como variável inexistente:</p>
+  <pre><code>tests/alunos.test.js
+   5:1  error  'afterAll' is not defined  no-undef
+  17:1  error  'describe' is not defined  no-undef
+  18:3  error  'it' is not defined        no-undef
+  ...dezenas de linhas iguais</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">eslint.config.mjs</span> — mais um bloco específico, como o que a parte 14 acrescentou para as migrations. O <code>globals.jest</code> vem do pacote <code>globals</code>, já importado no topo do arquivo desde a parte 4:</p>
+  </div>
+  <pre><code>export default defineConfig([
+<span class="ln-ctx">  { files: ["**/*.{js,mjs,cjs}"], plugins: { js }, extends: ["js/recommended"], languageOptions: { globals: globals.node } },
+  { files: ["**/*.js"], languageOptions: { sourceType: "commonjs" } },
+  { files: ["migrations/**/*.js"], languageOptions: { sourceType: "module" } },</span>
+<span class="ln-add">  // describe/it/expect/afterAll são injetados pelo Jest em tempo de execução.
+  { files: ["tests/**/*.js"], languageOptions: { globals: globals.jest } },</span>
+<span class="ln-ctx">  { rules: { "no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }] } },
+]);</span></code></pre>
+
+  <h2 id="app-separado">4. O obstáculo: separar app de index</h2>
+  <p>Para o supertest fazer isso, ele precisa receber o objeto <code>app</code> do Express. E o <code>index.js</code> hoje faz duas coisas no mesmo arquivo: monta o app <strong>e</strong> chama <code>app.listen()</code>. Importar esse arquivo num teste subiria um servidor na porta 3000 — que provavelmente já está ocupada pelo seu <code>npm run dev</code>.</p>
+  <p>A separação é mecânica: o app vai pra um arquivo, o <code>listen</code> fica no outro.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">app.js</span> na raiz — recorte <strong>todo</strong> o conteúdo atual do <code>index.js</code>, da linha <code>const express = require('express')</code> até o middleware de erro (inclusive), sem o <code>require('dotenv').config()</code> do topo e sem o bloco do <code>PORT</code>/<code>listen</code> do fim. Depois acrescente a exportação na última linha:</p>
+  </div>
+  <pre><code>const express = require('express');
+
+const alunosRouter = require('./routes/alunos');
+// ...todos os requires que já estavam no index.js
+
+const app = express();
+
+app.use(helmet());
+app.use(corsConfigurado);
+app.use(limitadorGlobal);
+app.use(express.json({ limit: '10kb' }));
+app.use(cookieParser());
+
+app.use('/alunos', alunosRouter);
+app.use('/instrutores', instrutoresRouter);
+app.use('/aulas', aulasRouter);
+app.use('/auth', limitadorLogin, authRouter);
+
+app.use((err, req, res, _next) => {
+  // ...o middleware de erro continua exatamente igual
+});
+
+<span class="ln-add">module.exports = app;</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.js</span> — o arquivo inteiro passa a ser só isto. Ele volta a ter uma responsabilidade só: subir o servidor:</p>
+  </div>
+  <pre><code>require('dotenv').config();
+
+const app = require('./app');
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`Servidor rodando em http://localhost:${PORT}`);
+});</code></pre>
+  <div class="callout">
+    <p>O <code>require('dotenv').config()</code> fica no <code>index.js</code>, não no <code>app.js</code>. Motivo: quem decide de onde vêm as variáveis de ambiente é quem <em>inicia</em> o processo. Em produção é o <code>index.js</code> lendo o <code>.env</code>; nos testes é o Jest lendo o <code>.env.test</code> (seção 8). Se o <code>app.js</code> carregasse o <code>.env</code> por conta própria, ele sobrescreveria a configuração de teste toda vez.</p>
+  </div>
+  <p>Confirme que nada quebrou: <code>npm run dev</code> deve subir igual a antes.</p>
+
+  <h2 id="banco-de-teste">5. Um banco só pros testes</h2>
+  <p>Teste que cria aluno, matricula e cancela precisa de um banco onde isso não incomode ninguém. Rodar contra o banco de desenvolvimento tem dois problemas: os testes sujam seus dados, e seus dados quebram os testes (um teste que espera "3 alunos" falha quando você cadastra o quarto na mão).</p>
+  <p>A solução é um banco separado, recriado do zero a cada execução da suíte. E "recriado do zero" agora é barato, porque a parte 14 deu o mecanismo: <code>node-pg-migrate up</code> monta o schema inteiro num banco vazio.</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Sem banco separado</h4>
+      <p>Teste depende do que já existe. Passa hoje, falha amanhã porque você cadastrou um instrutor. Ou pior: passa sempre, porque o dado que ele precisava já estava lá por acidente.</p>
+    </div>
+    <div class="good">
+      <h4>Banco recriado por execução</h4>
+      <p>Toda execução parte do mesmo estado: schema completo, zero linhas. O teste cria o que precisa e não depende de nada anterior.</p>
+    </div>
+  </div>
+
+  <h2 id="guarda">6. A guarda que evita o desastre</h2>
+  <p>Antes de escrever o código que apaga e recria o banco, pare um segundo: esse código roda <code>DROP DATABASE</code>. Se a variável de ambiente estiver errada — um <code>.env.test</code> mal copiado, uma variável exportada no terminal, um comando rodado na pasta errada — ele apaga o banco que encontrar.</p>
+  <div class="warn">
+    <p>Este é o único ponto desta trilha inteira em que um erro de configuração <strong>destrói dados sem volta</strong>. Todo o resto responde erro HTTP; aqui o estrago é silencioso e permanente. Por isso a primeira coisa que vamos escrever não é o <code>DROP</code>, é a recusa a rodar quando o nome do banco não termina em <code>_test</code>.</p>
+  </div>
+  <p>A convenção é simples e funciona: banco de teste tem nome terminando em <code>_test</code>. Qualquer outro nome, a suíte se recusa a rodar antes de tocar em nada.</p>
+
+  <h2 id="global-setup">7. globalSetup: banco limpo por execução</h2>
+  <p>Jest tem um gancho que roda <strong>uma vez</strong>, antes de qualquer arquivo de teste: é onde o banco é preparado.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">tests/globalSetup.js</span> — diretório novo:</p>
+  </div>
+  <pre><code>const { execSync } = require('node:child_process');
+const { Client } = require('pg');
+
+module.exports = async () => {
+  require('dotenv').config({ path: '.env.test', override: true, quiet: true });
+
+  const url = new URL(process.env.DATABASE_URL);
+  const nomeDoBanco = url.pathname.slice(1);
+
+  if (!nomeDoBanco.endsWith('_test')) {
+    throw new Error(
+      `Recusando rodar testes contra o banco "${nomeDoBanco}": o nome precisa terminar em _test.`,
+    );
+  }
+
+  // conecta no banco administrativo pra poder dropar/criar o de teste
+  const urlAdmin = new URL(process.env.DATABASE_URL);
+  urlAdmin.pathname = '/postgres';
+
+  const client = new Client({ connectionString: urlAdmin.toString() });
+  await client.connect();
+  await client.query(`DROP DATABASE IF EXISTS ${nomeDoBanco}`);
+  await client.query(`CREATE DATABASE ${nomeDoBanco}`);
+  await client.end();
+
+  execSync('npx node-pg-migrate up', {
+    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
+    stdio: 'ignore',
+  });
+};</code></pre>
+  <p>Três coisas acontecem aqui, na ordem:</p>
+  <ol>
+    <li><strong>Guarda.</strong> Nome sem <code>_test</code>, erro antes de qualquer comando destrutivo.</li>
+    <li><strong>Banco zerado.</strong> <code>DROP</code> + <code>CREATE</code> a partir de uma conexão com o banco <code>postgres</code> — não dá pra dropar o banco em que você está conectado.</li>
+    <li><strong>Schema.</strong> As migrations da parte 14 montam tudo. Se você criar uma migration nova amanhã, a suíte já a considera — sem ninguém precisar lembrar.</li>
+  </ol>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">jest.config.js</span> na raiz:</p>
+  </div>
+  <pre><code>module.exports = {
+  testEnvironment: 'node',
+  globalSetup: './tests/globalSetup.js',
+  setupFilesAfterEnv: ['./tests/setup.js'],
+  testMatch: ['**/tests/**/*.test.js'],
+};</code></pre>
+  <p><code>testEnvironment: 'node'</code> importa: o padrão do Jest simula um navegador, o que aqui só atrapalha. E <code>testMatch</code> restringe a busca a <code>tests/*.test.js</code>, para o Jest não tentar rodar as migrations ou o <code>testar-corrida.js</code> da parte 13.</p>
+
+  <h2 id="env-test">8. .env.test e a ordem de carregamento</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">.env.test</span> na raiz. Diferente do <code>.env</code>, este <strong>pode</strong> ser commitado: não há segredo de verdade aqui, e o CI vai precisar dele (parte 17):</p>
+  </div>
+  <pre><code>DATABASE_URL=postgresql://postgres:SUA_SENHA@localhost:5432/estudo_test
+JWT_SECRET=segredo_de_teste_nao_usar_em_producao
+CORS_ORIGINS=http://localhost:5173
+NODE_ENV=test</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">tests/setup.js</span> — o <code>globalSetup</code> roda num processo separado, então cada arquivo de teste precisa carregar as variáveis de novo:</p>
+  </div>
+  <pre><code>require('dotenv').config({ path: '.env.test', override: true, quiet: true });</code></pre>
+  <div class="warn">
+    <p><strong><code>override: true</code> é o detalhe que decide tudo.</strong> Sem ele, o <code>dotenv</code> respeita variáveis já definidas no ambiente — então se você tiver um <code>DATABASE_URL</code> exportado no terminal, ou o CI definir um, o <code>.env.test</code> é ignorado e os testes rodam contra o banco errado. Com <code>override</code>, o arquivo de teste sempre vence dentro da suíte.</p>
+    <p>Combinado com a guarda da seção 6, são duas barreiras independentes: uma garante que o valor certo é usado, a outra recusa valores perigosos.</p>
+  </div>
+
+  <h2 id="primeiro-teste">9. O primeiro teste</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">tests/alunos.test.js</span>:</p>
+  </div>
+  <pre><code>const request = require('supertest');
+const app = require('../app');
+const pool = require('../db/pool');
+
+afterAll(() => pool.end());
+
+function alunoValido(extra = {}) {
+  return {
+    nome: 'Aluno Teste',
+    email: `aluno${Date.now()}${Math.random()}@example.com`,
+    data_nascimento: '1990-01-01',
+    senha: 'senha123',
+    ...extra,
+  };
+}
+
+describe('POST /alunos', () => {
+  it('cria aluno com dados válidos', async () => {
+    const resposta = await request(app).post('/alunos').send(alunoValido());
+
+    expect(resposta.status).toBe(201);
+    expect(resposta.body).toHaveProperty('id');
+    expect(resposta.body).not.toHaveProperty('senha_hash');
+  });
+
+  it('aplica trim no nome', async () => {
+    const resposta = await request(app)
+      .post('/alunos')
+      .send(alunoValido({ nome: '   Joana Prado   ' }));
+
+    expect(resposta.body.nome).toBe('Joana Prado');
+  });
+
+  it('recusa email inválido', async () => {
+    const resposta = await request(app)
+      .post('/alunos')
+      .send(alunoValido({ email: 'nao-e-email' }));
+
+    expect(resposta.status).toBe(400);
+    expect(resposta.body.detalhes[0].campo).toBe('email');
+  });
+
+  it('recusa campo desconhecido', async () => {
+    const resposta = await request(app)
+      .post('/alunos')
+      .send(alunoValido({ apelido: 'Jô' }));
+
+    expect(resposta.status).toBe(400);
+  });
+});
+
+describe('GET /alunos', () => {
+  it('exige autenticação', async () => {
+    const resposta = await request(app).get('/alunos');
+
+    expect(resposta.status).toBe(401);
+  });
+});</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">package.json</span> — o script de teste:</p>
+  </div>
+  <pre><code>"scripts": {
+  "dev": "nodemon index.js",
+  "lint": "eslint .",
+<span class="ln-add">  "test": "jest --runInBand",</span>
+  "migrate": "node-pg-migrate",
+<span class="ln-ctx">  ...</span>
+}</code></pre>
+  <pre><code>npm test
+
+ PASS  tests/alunos.test.js
+Tests:       5 passed, 5 total</code></pre>
+  <div class="rule">
+    <span class="tag">Duas linhas que evitam dor de cabeça</span>
+    <p><code>afterAll(() =&gt; pool.end())</code>: sem fechar o pool, o Jest termina os testes e fica pendurado, porque ainda há conexões abertas. A mensagem é <em>"Jest did not exit one second after the test run has completed"</em>, e a causa é sempre essa.</p>
+    <p><code>--runInBand</code>: manda o Jest rodar os arquivos em série, não em paralelo. Como todos compartilham o mesmo banco, testes paralelos podem interferir entre si — um apagando dado que o outro acabou de criar. Serial é mais lento e previsível; previsível vale mais numa suíte que você quer confiar.</p>
+  </div>
+
+  <h2 id="ajudantes">10. Ajudantes: chegar rápido no que importa</h2>
+  <p>Testar autorização exige um aluno logado, um instrutor, um admin, uma aula. Repetir esse preparo em cada teste enterraria a intenção debaixo de dez linhas de setup.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">tests/ajudantes.js</span> — repare que ele <strong>não</strong> termina em <code>.test.js</code>, então o Jest não tenta rodá-lo como suíte:</p>
+  </div>
+  <pre><code>const request = require('supertest');
+const app = require('../app');
+const pool = require('../db/pool');
+const { hashSenha } = require('../services/senhaService');
+
+let contador = 0;
+const unico = () => `${Date.now()}_${contador++}`;
+
+async function criarAlunoLogado() {
+  const email = `aluno_${unico()}@example.com`;
+
+  await request(app).post('/alunos').send({
+    nome: 'Aluno Teste',
+    email,
+    data_nascimento: '1990-01-01',
+    senha: 'senha123',
+  });
+
+  const login = await request(app)
+    .post('/auth/login')
+    .send({ email, senha: 'senha123' });
+
+  return {
+    email,
+    token: login.body.access_token,
+    cookie: login.headers['set-cookie'],
+  };
+}
+
+async function criarInstrutorLogado(papel = 'instrutor') {
+  const email = `instrutor_${unico()}@studiofit.com`;
+  const senha_hash = await hashSenha('senha123');
+
+  const { rows } = await pool.query(
+    `INSERT INTO instrutores (nome, especialidade, email, senha_hash, papel)
+     VALUES ($1, 'testes', $2, $3, $4) RETURNING id`,
+    [`Instrutor ${unico()}`, email, senha_hash, papel],
+  );
+
+  const login = await request(app)
+    .post('/auth/instrutores/login')
+    .send({ email, senha: 'senha123' });
+
+  return {
+    id: rows[0].id,
+    token: login.body.access_token,
+    cookie: login.headers['set-cookie'],
+  };
+}
+
+async function criarAula(admin, dados = {}) {
+  const instrutor = await criarInstrutorLogado();
+
+  const resposta = await request(app)
+    .post('/aulas')
+    .set('Authorization', `Bearer ${admin.token}`)
+    .send({
+      nome: `Aula ${unico()}`,
+      instrutor_id: instrutor.id,
+      dia_semana: 'segunda',
+      hora_inicio: '07:00',
+      duracao_minutos: 60,
+      capacidade_maxima: 10,
+      ...dados,
+    });
+
+  return { aula: resposta.body, instrutor };
+}
+
+module.exports = { criarAlunoLogado, criarInstrutorLogado, criarAula };
+</code></pre>
+  <p>Duas decisões nesse arquivo:</p>
+  <ul>
+    <li><strong>O instrutor é criado direto no banco</strong>, não pela API. Criar instrutor exige um admin, e criar o primeiro admin exigiria outro admin — o problema circular da parte 10, seção 12. No teste, a saída é a mesma de lá: <code>INSERT</code> direto.</li>
+    <li><strong>Emails únicos por chamada.</strong> O <code>unico()</code> combina timestamp e contador porque duas chamadas no mesmo milissegundo dariam o mesmo email, e o <code>UNIQUE</code> da parte 3 recusaria a segunda.</li>
+  </ul>
+
+  <h2 id="testando-autorizacao">11. Testando a matriz de permissões</h2>
+  <p>Agora a parte que compensa o trabalho: a matriz da parte 10 vira código que se verifica sozinho.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">tests/autorizacao.test.js</span>:</p>
+  </div>
+  <pre><code>const request = require('supertest');
+const app = require('../app');
+const pool = require('../db/pool');
+const {
+  criarAlunoLogado,
+  criarInstrutorLogado,
+  criarAula,
+} = require('./ajudantes');
+
+afterAll(() => pool.end());
+
+describe('matriz de permissões', () => {
+  it('GET /alunos: 401 sem token, 403 como aluno, 200 como admin', async () => {
+    const aluno = await criarAlunoLogado();
+    const admin = await criarInstrutorLogado('admin');
+
+    expect((await request(app).get('/alunos')).status).toBe(401);
+
+    expect(
+      (
+        await request(app)
+          .get('/alunos')
+          .set('Authorization', `Bearer ${aluno.token}`)
+      ).status,
+    ).toBe(403);
+
+    expect(
+      (
+        await request(app)
+          .get('/alunos')
+          .set('Authorization', `Bearer ${admin.token}`)
+      ).status,
+    ).toBe(200);
+  });
+
+  it('instrutor só edita as próprias aulas', async () => {
+    const admin = await criarInstrutorLogado('admin');
+    const { aula } = await criarAula(admin);
+    const outro = await criarInstrutorLogado();
+
+    const resposta = await request(app)
+      .patch(`/aulas/${aula.id}`)
+      .set('Authorization', `Bearer ${outro.token}`)
+      .send({ nome: 'Roubada' });
+
+    expect(resposta.status).toBe(403);
+  });
+});</code></pre>
+  <p>O primeiro teste é o que teria pego o bug do <code>PATCH</code>/<code>DELETE</code> sem middleware da parte 10 — aquele que respondia <code>500</code> com ou sem token. Um teste que espera <code>401</code> teria falhado no minuto seguinte à mudança.</p>
+
+  <h2 id="testando-regras">12. Testando as regras de negócio</h2>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">tests/autorizacao.test.js</span> — acrescente este bloco no fim do arquivo, depois do <code>describe</code> anterior:</p>
+  </div>
+  <pre><code>describe('regras de negócio', () => {
+  it('respeita a capacidade máxima', async () => {
+    const admin = await criarInstrutorLogado('admin');
+    const { aula } = await criarAula(admin, {
+      capacidade_maxima: 1,
+      hora_inicio: '08:00',
+    });
+
+    const primeiro = await criarAlunoLogado();
+    const segundo = await criarAlunoLogado();
+
+    const r1 = await request(app)
+      .post(`/aulas/${aula.id}/matriculas`)
+      .set('Authorization', `Bearer ${primeiro.token}`);
+
+    const r2 = await request(app)
+      .post(`/aulas/${aula.id}/matriculas`)
+      .set('Authorization', `Bearer ${segundo.token}`);
+
+    expect(r1.status).toBe(201);
+    expect(r2.status).toBe(409);
+  });
+
+  it('recusa matrícula duplicada', async () => {
+    const admin = await criarInstrutorLogado('admin');
+    const { aula } = await criarAula(admin, { hora_inicio: '09:00' });
+    const aluno = await criarAlunoLogado();
+
+    await request(app)
+      .post(`/aulas/${aula.id}/matriculas`)
+      .set('Authorization', `Bearer ${aluno.token}`);
+
+    const segunda = await request(app)
+      .post(`/aulas/${aula.id}/matriculas`)
+      .set('Authorization', `Bearer ${aluno.token}`);
+
+    expect(segunda.status).toBe(409);
+  });
+});</code></pre>
+  <div class="callout">
+    <p>O <code>hora_inicio</code> diferente em cada teste não é decoração: <code>criarAula</code> cria um instrutor novo a cada chamada, mas se dois testes usassem o mesmo instrutor no mesmo horário, a Regra 3 (conflito de agenda) recusaria a segunda aula com <code>422</code> — e o teste falharia por um motivo que não tem nada a ver com o que ele quer verificar. É a mesma armadilha que apareceu no script da parte 13.</p>
+  </div>
+
+  <h2 id="testando-refresh">13. Testando o fluxo de refresh</h2>
+  <p>O fluxo da parte 8 com o cookie da parte 11 é o mais difícil de testar na mão — e o que mais ganha com automação.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">tests/autorizacao.test.js</span> — mais um bloco no fim:</p>
+  </div>
+  <pre><code>describe('fluxo de refresh', () => {
+  it('renova com cookie e detecta reuso', async () => {
+    const aluno = await criarAlunoLogado();
+
+    const primeira = await request(app)
+      .post('/auth/refresh')
+      .set('Cookie', aluno.cookie);
+
+    expect(primeira.status).toBe(200);
+    expect(primeira.body).toHaveProperty('access_token');
+    expect(primeira.body).not.toHaveProperty('refresh_token');
+
+    // reapresentar o mesmo cookie: rotação já revogou (parte 8)
+    const reuso = await request(app)
+      .post('/auth/refresh')
+      .set('Cookie', aluno.cookie);
+
+    expect(reuso.status).toBe(401);
+  });
+
+  it('recusa refresh sem cookie', async () => {
+    expect((await request(app).post('/auth/refresh')).status).toBe(401);
+  });
+});</code></pre>
+  <p>O <code>expect(...).not.toHaveProperty('refresh_token')</code> é pequeno e vale ouro: ele trava a decisão da parte 11 de que o refresh token <strong>não</strong> volta no corpo. Se alguém, um dia, "simplificar" o <code>responderComTokens</code> devolvendo os dois de novo, o teste falha — e o motivo é uma regressão de segurança que ninguém notaria olhando a resposta.</p>
+  <pre><code>npm test
+
+ PASS  tests/alunos.test.js
+ PASS  tests/autorizacao.test.js
+Tests:       11 passed, 11 total</code></pre>
+
+  <h2 id="obstaculos">14. Obstáculos que a própria API cria</h2>
+  <p>Algumas defesas construídas nas partes anteriores atrapalham os testes. Vale saber onde elas aparecem antes de perder tempo depurando.</p>
+  <table>
+    <thead><tr><th>Defesa</th><th>Como atrapalha</th><th>O que fazer</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Rate limit</strong> (parte 9)</td><td>300 requisições por 15 min no limite global. Uma suíte grande passa disso, e testes começam a falhar com <code>429</code> sem motivo aparente.</td><td>Desligar em teste, com a opção <code>skip</code> do <code>express-rate-limit</code> (abaixo).</td></tr>
+      <tr><td><strong>bcrypt</strong> (parte 7)</td><td>Deliberadamente lento. Cada aluno criado no teste custa ~100 ms.</td><td>Aceitar. Reduzir o custo em teste esconderia diferença de comportamento; a suíte inteira ainda roda em poucos segundos.</td></tr>
+      <tr><td><strong>Regra 3</strong> (parte 5)</td><td>Conflito de agenda derruba testes que criam aulas parecidas (seção 12).</td><td>Variar horário ou instrutor entre testes.</td></tr>
+      <tr><td><strong>Access token de 15 min</strong> (parte 8)</td><td>Nenhum problema numa suíte que roda em segundos — mas impede testar expiração de forma direta.</td><td>Testar expiração exigiria forjar um token vencido, como foi feito na mão na parte 8.</td></tr>
+    </tbody>
+  </table>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">middlewares/limitadores.js</span> — adicione a mesma opção <code>skip</code> nos <strong>dois</strong> limitadores, junto das opções que já existem:</p>
+  </div>
+  <pre><code>const limitadorGlobal = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 300,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+<span class="ln-add">  skip: () =&gt; process.env.NODE_ENV === 'test',</span>
+  message: { erro: 'Muitas requisições. Tente novamente em alguns minutos.' },
+});</code></pre>
+  <div class="warn">
+    <p>Desligar uma proteção em ambiente de teste é sempre uma troca. O ganho é uma suíte que não falha por motivo alheio ao que testa; a perda é que o rate limit deixa de ser exercitado. Se quiser testá-lo, o caminho é um arquivo de teste dedicado que ligue o limitador explicitamente — não deixar ele ligado para todos os outros e conviver com falhas intermitentes.</p>
+    <p>Perceba que isso só é seguro porque <code>NODE_ENV</code> vem do <code>.env.test</code> e o <code>globalSetup</code> recusa banco sem <code>_test</code>. Uma configuração que desliga segurança precisa de uma condição que <strong>não</strong> possa valer em produção por acidente.</p>
+  </div>
+
+  <h2 id="erros-comuns">15. Erros comuns</h2>
+  <ol>
+    <li><strong>Rodar testes contra o banco de desenvolvimento</strong> — apaga tudo no <code>DROP DATABASE</code> do <code>globalSetup</code>. A guarda da seção 6 existe só por isso, e é a linha mais importante desta parte.</li>
+    <li><strong>Esquecer <code>override: true</code> no dotenv</strong> — uma variável exportada no terminal vence o <code>.env.test</code>, e os testes rodam onde não deviam (seção 8).</li>
+    <li><strong>Esquecer <code>pool.end()</code></strong> — Jest não encerra e o processo fica pendurado. Em CI, isso vira build travado até o timeout.</li>
+    <li><strong>Importar <code>index.js</code> em vez de <code>app.js</code></strong> — o teste sobe um servidor de verdade na porta 3000 e falha com <code>EADDRINUSE</code> se o <code>npm run dev</code> estiver rodando.</li>
+    <li><strong>Testes que dependem de ordem</strong> — "o teste 2 usa o aluno criado pelo teste 1" quebra quando alguém roda um teste isolado. Cada teste cria o que precisa.</li>
+    <li><strong>Dados fixos que colidem</strong> — email <code>teste@example.com</code> em dois testes viola o <code>UNIQUE</code>. Gere valores únicos (seção 10).</li>
+    <li><strong>Testar implementação em vez de comportamento</strong> — verificar que <code>bcrypt.hash</code> foi chamado é frágil; verificar que a resposta não traz <code>senha_hash</code> descreve a garantia real.</li>
+    <li><strong>Colocar ajudantes em arquivo <code>.test.js</code></strong> — o Jest tenta rodar e reclama que não há testes no arquivo.</li>
+  </ol>
+
+  <h2 id="proximos-passos">16. O que vem a seguir</h2>
+  <p>A suíte cobre hoje o cadastro de aluno com validação, a matriz de permissões, duas regras de negócio e o fluxo de refresh com cookie. É pouco perto de tudo que a API faz — e já é infinitamente mais do que zero, porque a partir de agora cada parte nova pode adicionar seus testes em vez de recomeçar do <code>curl</code>.</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>CI</strong> — a próxima parte. Os testes rodando sozinhos a cada <code>push</code>, no GitHub Actions: Postgres como serviço do workflow, migrations aplicadas, <code>npm test</code> e <code>npm run lint</code>. É o que transforma a suíte de "coisa que eu rodo quando lembro" em portão que barra código quebrado antes de virar problema.</li>
+      <li><strong>Cobertura</strong> — <code>jest --coverage</code> mostra quais linhas nenhum teste exercita. Útil como mapa do que falta, péssimo como meta: perseguir 100% leva a testes que existem só pra subir o número.</li>
+    </ol>
+  </div>
+  <p>Depois: <strong>contrato da API</strong> (paginação, filtro, ordenação, OpenAPI) → <strong>produção</strong> (logging estruturado, health check, Dockerfile e deploy com HTTPS).</p>
+  <p>Fica registrado o que a suíte ainda não cobre e vale acrescentar quando você mexer nessas áreas: as regras 3 e 4 (conflito de agenda e cancelamento), o soft-delete da parte 15, os limites de validação de cada schema, e o comportamento sob concorrência da parte 13 — este último cabe melhor como teste próprio, porque exige disparar requisições em paralelo, o oposto do <code>--runInBand</code>.</p>
+
+  <footer class="closing">
+    <p>Ao terminar, rode <code>npm test</code> duas vezes seguidas: o resultado precisa ser idêntico. Suíte que passa na primeira e falha na segunda tem dado sobrando entre execuções — e o <code>globalSetup</code> desta parte existe justamente pra isso não acontecer. Volta com dúvidas, principalmente se o Jest não encerrar sozinho (é o <code>pool.end()</code>) ou se algum teste falhar com <code>429</code> (é o rate limit da seção 14).</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>
