@@ -53,6 +53,9 @@ Trilha específica de stack (complementa a API REST, que é conceitual/independe
 17. [Integração contínua](node-express/17-integracao-continua.html) — GitHub Actions rodando lint e testes a cada push, Postgres como service container com health check, `npm ci` contra `npm install`, e branch protection como portão.
 18. [Paginação, filtro e ordenação](node-express/18-paginacao-filtro-ordenacao.html) — envelope com metadados de página, `LIMIT`/`OFFSET` com total via window function, por que ordenar por placeholder não ordena (e não avisa), e whitelist de colunas contra SQL injection.
 19. [Documentação com OpenAPI](node-express/19-documentacao-openapi.html) — spec derivada dos schemas Zod com `z.toJSONSchema`, `io: 'input'` para descrever a entrada, as 20 operações escritas em módulos de `paths`, Swagger UI servido em `/docs`, e o risco de a doc divergir do código.
+20. [Logs e health check](node-express/20-logs-e-health-check.html) — log estruturado em JSON com `pino`, request id que atravessa serviços, redaction de senha e token, e a diferença entre liveness e readiness (e por que confundir as duas derruba a API).
+21. [Empacotando com Docker](node-express/21-empacotando-com-docker.html) — `Dockerfile` e `.dockerignore`, ordem das camadas como cache, `USER node` em vez de root, `HEALTHCHECK` usando a rota da parte 20, e o que PID 1 faz com um SIGTERM sem handler.
+22. [Deploy com HTTPS](node-express/22-deploy-com-https.html) — API no Render e Postgres no Neon, `trust proxy` para o rate limit contar o IP certo, `SameSite=None` para o cookie sobreviver ao front em outro domínio, `render.yaml` versionado e migrations como passo de deploy.
 
 ## Estrutura do repositório
 
@@ -87,7 +90,10 @@ estudo/
     ├── 16-testes-automatizados.html
     ├── 17-integracao-continua.html
     ├── 18-paginacao-filtro-ordenacao.html
-    └── 19-documentacao-openapi.html
+    ├── 19-documentacao-openapi.html
+    ├── 20-logs-e-health-check.html
+    ├── 21-empacotando-com-docker.html
+    └── 22-deploy-com-https.html
 ```
 
 Novas trilhas de estudo entram como novos diretórios na raiz, seguindo o mesmo padrão: arquivos HTML numerados em ordem de leitura.

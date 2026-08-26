@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Empacotando com Docker</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="20-logs-e-health-check.html">&larr; 20. Logs e health check</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-problema">1. "Na minha máquina funciona"</a></li>
+    <li><a href="#dockerignore">2. O que não entra na imagem</a></li>
+    <li><a href="#dockerfile">3. O Dockerfile</a></li>
+    <li><a href="#camadas">4. A ordem das camadas é cache</a></li>
+    <li><a href="#omit-dev">5. --omit=dev, e o que isso deixa de fora</a></li>
+    <li><a href="#usuario">6. Não rode como root</a></li>
+    <li><a href="#pid1">7. PID 1 e o sinal que ninguém escuta</a></li>
+    <li><a href="#healthcheck">8. HEALTHCHECK sem instalar curl</a></li>
+    <li><a href="#dotenv">9. O .env que não existe mais</a></li>
+    <li><a href="#compose">10. A API entra no compose</a></li>
+    <li><a href="#rede">11. A rede do compose muda o endereço do banco</a></li>
+    <li><a href="#migrations">12. Migrations dentro do container</a></li>
+    <li><a href="#testando">13. Testando</a></li>
+    <li><a href="#erros-comuns">14. Erros comuns</a></li>
+    <li><a href="#proximos-passos">15. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="22-deploy-com-https.html">22. Deploy com HTTPS &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 21</div>
+  <h1>Empacotando com Docker</h1>
+  <p class="subtitle">O Postgres roda em container desde a parte 1. A API, não — ela depende do Node que está instalado na sua máquina, do arquivo <code>.env</code> que só existe aí, e de você lembrar a ordem dos comandos. Esta parte transforma a aplicação em uma imagem que sobe igual em qualquer lugar.</p>
+
+  <h2 id="o-problema">1. "Na minha máquina funciona"</h2>
+  <p>Para outra pessoa rodar esta API hoje, ela precisa: instalar a versão certa do Node, clonar o repositório, rodar <code>npm install</code>, subir o Postgres, criar um <code>.env</code> com quatro variáveis que ela precisa adivinhar, e rodar as migrations na ordem. Cada passo é uma chance de dar errado, e nenhum deles está escrito em lugar nenhum que o computador entenda.</p>
+  <p>Uma imagem Docker é essa lista virando arquivo. O que ela empacota:</p>
+  <table>
+    <thead><tr><th>Hoje depende de</th><th>Na imagem</th></tr></thead>
+    <tbody>
+      <tr><td>Node instalado na máquina</td><td>Vem na imagem base, na versão fixada</td></tr>
+      <tr><td><code>npm install</code> rodado à mão</td><td>Passo do build, com <code>package-lock.json</code></td></tr>
+      <tr><td>O código no diretório certo</td><td>Copiado para dentro, em <code>/app</code></td></tr>
+      <tr><td>Você lembrar o comando</td><td><code>CMD</code>, no fim do arquivo</td></tr>
+    </tbody>
+  </table>
+  <div class="rule">
+    <span class="tag">Imagem e container</span>
+    <p><strong>Imagem</strong> é o pacote parado — o resultado do <code>docker build</code>, imutável, igual em qualquer máquina. <strong>Container</strong> é uma execução dessa imagem, com variáveis de ambiente e rede próprias.</p>
+    <p>A distinção importa porque define o que vai <em>dentro</em> e o que vai <em>fora</em>: código e dependências entram na imagem; senha, URL do banco e segredo do JWT ficam de fora e chegam só quando o container sobe. É a mesma separação da parte 1, agora valendo também para a aplicação.</p>
+  </div>
+
+  <h2 id="dockerignore">2. O que não entra na imagem</h2>
+  <p>Antes do Dockerfile, o <code>.dockerignore</code>. Ele é o equivalente do <code>.gitignore</code> para o build, e vem primeiro por um motivo de segurança: sem ele, um <code>COPY . .</code> leva o seu <code>.env</code> para dentro da imagem — e imagem é distribuída.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">.dockerignore</span> — arquivo novo, na raiz:</p>
+  </div>
+  <pre><code># O que NÃO entra na imagem.
+node_modules
+.git
+.github
+.gitignore
+
+# Segredo nunca vai para dentro da imagem: as variáveis entram em tempo
+# de execução, não em tempo de build.
+.env
+.env.test
+.env.example
+.env.test.example
+
+# Só servem no seu computador.
+tests
+coverage
+*.md
+testar-corrida.js
+Dockerfile
+.dockerignore</code></pre>
+  <div class="warn">
+    <p>Repare no que <strong>não</strong> está na lista: <code>docs/</code>. É tentador ignorar um diretório com esse nome, mas ali mora a especificação OpenAPI da parte 19, que o <code>app.js</code> importa. Sem ela a imagem quebra no boot com <code>Cannot find module './docs/openapi'</code>.</p>
+    <p>O critério não é o nome do diretório, é se a aplicação precisa dele para rodar. <code>tests/</code> não precisa. <code>migrations/</code> precisa — a seção 12 explica por quê.</p>
+  </div>
+  <p>Ignorar <code>node_modules</code> não é só economia: as dependências são reinstaladas dentro da imagem, para o sistema operacional dela. Copiar as suas leva binários compilados para a plataforma errada.</p>
+
+  <h2 id="dockerfile">3. O Dockerfile</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">Dockerfile</span> — arquivo novo, na raiz:</p>
+  </div>
+  <pre><code>FROM node:24-alpine
+
+# Muda o comportamento de várias bibliotecas, e é o que o logger da parte 20
+# lê para decidir o nível de log.
+ENV NODE_ENV=production
+
+WORKDIR /app
+
+# Copiado ANTES do resto do código: esta camada só é refeita quando as
+# dependências mudam, não a cada alteração de rota.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev &amp;&amp; npm cache clean --force
+
+# O código vai como usuário node, não como root.
+COPY --chown=node:node . .
+
+USER node
+
+EXPOSE 3000
+
+# Usa a rota de liveness da parte 20. fetch é global no Node 24 — não
+# precisa instalar curl nem wget na imagem só para isso.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://localhost:3000/health').then(r =&gt; process.exit(r.ok ? 0 : 1)).catch(() =&gt; process.exit(1))"
+
+# Forma exec (lista, não string): o node vira PID 1 e recebe o SIGTERM
+# que o desligamento gracioso da parte 20 espera.
+CMD ["node", "index.js"]</code></pre>
+  <p>Vinte linhas, e cada uma resolve um problema específico. As próximas cinco seções destrincham as decisões que não são óbvias.</p>
+  <div class="callout">
+    <p><strong>Por que não multi-stage?</strong> É comum ver Dockerfiles de Node com dois <code>FROM</code>: um estágio compila, outro só recebe o resultado. Isso vale quando existe etapa de build — TypeScript a transpilar, bundler a rodar. Esta API é JavaScript puro: não há nada para compilar, e o segundo estágio só receberia os mesmos arquivos. Um estágio só, com as camadas na ordem certa (seção 4), entrega o mesmo tamanho sem a complexidade.</p>
+  </div>
+
+  <h2 id="camadas">4. A ordem das camadas é cache</h2>
+  <p>Cada instrução do Dockerfile vira uma camada, e o Docker reaproveita as camadas cujas entradas não mudaram. É por isso que o <code>package.json</code> é copiado <strong>sozinho</strong>, antes do resto do código:</p>
+  <pre><code>COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+COPY --chown=node:node . .</code></pre>
+  <p>Com essa ordem, alterar uma rota invalida só a última camada — o <code>npm ci</code> é reaproveitado. Com a ordem invertida (<code>COPY . .</code> antes), qualquer alteração em qualquer arquivo invalidaria a instalação inteira das dependências, e todo build baixaria tudo de novo.</p>
+  <p>No build medido aqui, a diferença é entre 20 segundos e menos de 2.</p>
+  <p>O <code>npm cache clean --force</code> está na <strong>mesma</strong> instrução <code>RUN</code> de propósito: camada de imagem é imutável, então apagar o cache numa instrução seguinte não diminuiria nada — o cache continuaria dentro da camada anterior, só invisível.</p>
+
+  <h2 id="omit-dev">5. --omit=dev, e o que isso deixa de fora</h2>
+  <p><code>npm ci --omit=dev</code> instala só as <code>dependencies</code>, ignorando as <code>devDependencies</code>. Jest, ESLint, nodemon, supertest e o <code>pino-pretty</code> da parte 20 não têm o que fazer em produção.</p>
+  <p>E <code>npm ci</code>, não <code>npm install</code>: ele exige o <code>package-lock.json</code> e instala exatamente as versões travadas nele. É a mesma decisão da parte 17 para o CI, pelo mesmo motivo — build reproduzível.</p>
+  <div class="warn">
+    <p>Isso tem uma consequência que só aparece quando você tenta migrar: o <code>node-pg-migrate</code> está em <code>devDependencies</code>, então ele <strong>não entra na imagem</strong>. Rodar <code>npm run migrate:up</code> dentro do container falha com <code>sh: node-pg-migrate: not found</code>. A seção 12 resolve.</p>
+  </div>
+
+  <h2 id="usuario">6. Não rode como root</h2>
+  <p>Por padrão, um container Node roda como <strong>root</strong>. Se alguém conseguir execução de código pela aplicação, herda root dentro do container — e a partir daí a distância até a máquina hospedeira depende só de haver alguma falha de isolamento.</p>
+  <p>As imagens oficiais do Node já trazem um usuário sem privilégio chamado <code>node</code> (uid 1000). Duas linhas usam ele:</p>
+  <pre><code>COPY --chown=node:node . .
+USER node</code></pre>
+  <p>A ordem importa: o <code>USER</code> vem <strong>depois</strong> do <code>npm ci</code>, porque a instalação precisa escrever em <code>/app</code>. E o <code>--chown</code> no <code>COPY</code> entrega o código já com o dono certo, em vez de exigir um <code>chown -R</code> depois — que duplicaria os arquivos numa camada nova.</p>
+  <pre><code>docker compose exec api id
+# uid=1000(node) gid=1000(node) groups=1000(node)</code></pre>
+
+  <h2 id="pid1">7. PID 1 e o sinal que ninguém escuta</h2>
+  <p>Quando o container sobe, o processo do <code>CMD</code> vira o <strong>PID 1</strong> — e PID 1 no Linux tem uma regra especial: <strong>os tratamentos padrão de sinal não se aplicam a ele</strong>. Um processo comum que recebe SIGTERM morre; o PID 1 que recebe SIGTERM sem ter registrado um handler simplesmente <em>ignora</em>.</p>
+  <p>É aqui que a parte 20 se paga. Medi <code>docker stop</code> nas duas versões, mesma imagem, mesma aplicação, mudando só o <code>index.js</code>:</p>
+  <table>
+    <thead><tr><th>Versão</th><th><code>docker stop</code></th><th>O que aconteceu</th></tr></thead>
+    <tbody>
+      <tr><td>Com o handler da parte 20</td><td><strong>0,19 s</strong></td><td>SIGTERM tratado, readiness em 503, pool encerrado, saída limpa</td></tr>
+      <tr><td>Sem o handler</td><td><strong>10,12 s</strong></td><td>SIGTERM ignorado; o Docker esperou o timeout e mandou SIGKILL</td></tr>
+    </tbody>
+  </table>
+  <p>Dez segundos por container, em todo deploy, com as requisições em andamento cortadas no fim. E nada avisa: o container para, o deploy conclui, ninguém percebe.</p>
+  <div class="callout">
+    <p><strong>Sobre a forma exec.</strong> A recomendação de escrever <code>CMD ["node", "index.js"]</code> em vez de <code>CMD node index.js</code> costuma vir acompanhada da história de que a forma shell impede o sinal de chegar. Testei as duas nesta imagem, e também <code>CMD ["npm", "start"]</code>: <strong>as três desligaram graciosamente</strong>, em torno de 0,1 s. O <code>sh</code> do Alpine faz <code>exec</code> quando o comando é simples, e o npm 11 repassa sinais.</p>
+    <p>A forma exec continua sendo a certa — menos processos na árvore, o node diretamente como PID 1, sem shell nem npm no meio consumindo memória. Mas o que <em>de fato</em> quebra o desligamento é a aplicação não tratar o sinal, não a sintaxe do <code>CMD</code>.</p>
+  </div>
+
+  <h2 id="healthcheck">8. HEALTHCHECK sem instalar curl</h2>
+  <p>A instrução <code>HEALTHCHECK</code> diz ao Docker como perguntar se o container está saudável. Ela aponta para a rota de <strong>liveness</strong> da parte 20 — a que não consulta o banco, pelo motivo explicado lá.</p>
+  <pre><code>HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://localhost:3000/health').then(r =&gt; process.exit(r.ok ? 0 : 1)).catch(() =&gt; process.exit(1))"</code></pre>
+  <p>A maioria dos exemplos usa <code>curl</code>, que <strong>não existe</strong> na imagem <code>node:alpine</code> — e instalá-lo só para isso engorda a imagem e aumenta a superfície de ataque. O Node 24 tem <code>fetch</code> global: o binário que já está lá resolve.</p>
+  <p>O <code>--start-period=10s</code> é o detalhe fácil de esquecer: durante esse tempo, falhas não contam. Sem ele, um container que demora a subir seria marcado como não saudável antes de terminar de iniciar.</p>
+  <pre><code>docker compose ps
+# api  running  Up 10 seconds (healthy)
+# db   running  Up 15 seconds (healthy)</code></pre>
+
+  <h2 id="dotenv">9. O .env que não existe mais</h2>
+  <p>Dentro do container não há <code>.env</code> — o <code>.dockerignore</code> o excluiu, de propósito. As variáveis chegam pelo ambiente, colocadas lá pelo compose ou pela hospedagem.</p>
+  <p>O <code>dotenv</code> continua no <code>index.js</code> e não atrapalha: se não achar o arquivo, segue em frente e usa o que já está no ambiente. Só que ele <strong>escreve na saída</strong> ao carregar — e isso estraga o log estruturado da parte 20:</p>
+  <pre><code>◇ injected env (0) from .env // tip: ⌘ override existing { override: true }
+{"level":"info","time":"2026-08-25T19:32:29.998Z","servico":"studio-fit-api","porta":3000,"msg":"servidor no ar"}</code></pre>
+  <p>A primeira linha não é JSON. Um agregador que espera uma linha por evento vai descartá-la ou, pior, registrar um erro de parsing a cada boot.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.js</span> — primeira linha do arquivo:</p>
+  </div>
+  <pre><code><span class="ln-del">require('dotenv').config();</span>
+<span class="ln-add">require('dotenv').config({ quiet: true });</span></code></pre>
+  <p>Com isso toda linha da saída volta a ser JSON válido — que era a promessa da parte 20.</p>
+
+  <h2 id="compose">10. A API entra no compose</h2>
+  <p>O <code>docker-compose.yml</code> já sobe o Postgres. Agora ele sobe os dois, e passa a ser o único comando necessário para rodar o projeto inteiro.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">docker-compose.yml</span> — o serviço <code>db</code> ganha um <code>healthcheck</code> e perde a publicação de porta; o serviço <code>api</code> é novo:</p>
+  </div>
+  <pre><code>services:
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: estudo
+<span class="ln-del">    ports:                                   # REMOVER — vira o comentário abaixo
+      - '127.0.0.1:5432:5432'</span>
+<span class="ln-add">    # NOVO — sem 'ports', o banco não é publicado no host. Só quem está na
+    # rede do compose — a api — o alcança. Se quiser abrir o psql ou o
+    # DBeaver da sua máquina, descomente:
+    # ports:
+    #   - '127.0.0.1:5432:5432'</span>
+<span class="ln-ctx">    volumes:
+      - pgdata:/var/lib/postgresql/data</span>
+<span class="ln-add">    # NOVO — a api espera este healthcheck antes de subir.
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 10</span>
+
+<span class="ln-add">  # NOVO — o serviço inteiro, daqui até o fim do bloco
+  api:
+    build: .
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # 'db' é o nome do serviço: dentro da rede do compose ele resolve
+      # para o container do Postgres. 'localhost' aqui seria o próprio
+      # container da api.
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/estudo
+      JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      PORT: 3000
+    ports:
+      - '127.0.0.1:3000:3000'</span>
+
+<span class="ln-ctx">volumes:
+  pgdata:</span></code></pre>
+  <p>O <code>depends_on</code> com <code>condition: service_healthy</code> é o que evita a corrida clássica: sem ele, o compose considera o banco "pronto" assim que o container inicia, e a API tenta conectar antes de o Postgres aceitar conexão.</p>
+  <div class="rule">
+    <span class="tag">O banco saiu do host</span>
+    <p>O <code>ports</code> do <code>db</code> virou comentário. Com a API dentro da rede do compose, publicar a porta 5432 no host deixou de ser necessário — e porta publicada é superfície exposta. Agora só quem está na rede do compose alcança o banco.</p>
+    <p>Se você quiser abrir o <code>psql</code> ou um cliente gráfico da sua máquina, descomente. É uma escolha consciente entre conveniência de desenvolvimento e exposição, não um padrão a carregar para produção.</p>
+  </div>
+
+  <h2 id="rede">11. A rede do compose muda o endereço do banco</h2>
+  <p>Repare na <code>DATABASE_URL</code> do serviço <code>api</code>:</p>
+  <pre><code>DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/estudo</code></pre>
+  <p>O host é <code>db</code>, não <code>localhost</code>. Essa é a troca mental que o container exige: dentro dele, <code>localhost</code> é o <em>próprio container</em> — não a sua máquina, não o Postgres. O compose cria uma rede onde cada serviço é alcançável pelo <strong>nome do serviço</strong>, e é assim que a API acha o banco.</p>
+  <p>E a porta é <code>5432</code>, a porta real do Postgres dentro da rede, mesmo com o <code>ports</code> comentado. Publicação de porta serve para o mundo <em>fora</em> do Docker; entre containers, a rede interna já liga tudo.</p>
+  <div class="callout">
+    <p>Isso também explica por que o <code>.env</code> da sua máquina não serve dentro do container sem ajuste: lá a <code>DATABASE_URL</code> aponta para <code>localhost:5432</code>, que dentro do container não é o banco. É por isso que o compose monta a URL do zero, em vez de repassar a variável.</p>
+  </div>
+
+  <h2 id="migrations">12. Migrations dentro do container</h2>
+  <p>A parte 14 deixou o esquema do banco versionado em <code>migrations/</code>. Só que, como a seção 5 avisou, o <code>node-pg-migrate</code> está em <code>devDependencies</code> e o <code>--omit=dev</code> o deixa de fora da imagem.</p>
+  <p>É uma decisão de verdade, com dois caminhos: rodar as migrations de fora (num job separado, com as dev deps instaladas) ou deixar a própria imagem capaz de migrar. Para este projeto, o segundo é mais simples — e é o que a maioria das hospedagens espera, já que o comando de deploy delas roda <em>dentro</em> do container.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">package.json</span> — mova <code>node-pg-migrate</code> de <code>devDependencies</code> para <code>dependencies</code>, e rode <code>npm install</code> depois para o lock refletir a mudança:</p>
+  </div>
+  <pre><code>  "dependencies": {
+<span class="ln-ctx">    "jsonwebtoken": "^9.0.3",</span>
+<span class="ln-add">    "node-pg-migrate": "^9.0.0",</span>
+<span class="ln-ctx">    "pg": "^8.22.0",</span>
+    ...
+  },
+  "devDependencies": {
+<span class="ln-ctx">    "jest": "^30.4.2",</span>
+<span class="ln-del">    "node-pg-migrate": "^9.0.0",</span>
+<span class="ln-ctx">    "nodemon": "^3.1.11",</span>
+    ...
+  }</code></pre>
+  <p>Com isso, migrar é um comando no container que já está no ar:</p>
+  <pre><code>docker compose exec api npm run migrate:up
+# ...
+# INSERT INTO "public"."pgmigrations" (name, run_on) VALUES ('1787666415450_indices-para-ordenacao', NOW());
+# Migrations complete!</code></pre>
+  <div class="warn">
+    <p>Resista à tentação de colocar as migrations no <code>CMD</code> (<code>CMD ["sh", "-c", "npm run migrate:up &amp;&amp; node index.js"]</code>). Funciona com um container e quebra com dois: subindo três réplicas, as três tentam migrar ao mesmo tempo, no mesmo banco. Migration é passo de <strong>deploy</strong>, executado uma vez; não é passo de <strong>boot</strong>, executado por instância.</p>
+  </div>
+
+  <h2 id="testando">13. Testando</h2>
+  <pre><code># 1) constrói e sobe os dois serviços
+docker compose up -d --build
+
+# 2) ambos precisam ficar healthy (o do db é o pg_isready, o da api é o HEALTHCHECK)
+docker compose ps
+# api  running  Up 10 seconds (healthy)
+# db   running  Up 15 seconds (healthy)
+
+# 3) migrations num banco novo
+docker compose exec api npm run migrate:up
+# Migrations complete!
+
+# 4) a API responde de dentro do container
+curl -s -o /dev/null -w "%{http_code}\n" localhost:3000/aulas         # 200
+curl -s -o /dev/null -w "%{http_code}\n" localhost:3000/instrutores   # 200
+curl -s -o /dev/null -w "%{http_code}\n" localhost:3000/docs/         # 200
+curl -s localhost:3000/health
+# {"status":"ok","uptime_segundos":18,"timestamp":"..."}</code></pre>
+  <p>Três verificações que valem mais que as outras:</p>
+  <pre><code># a) o processo NÃO é root
+docker compose exec api id
+# uid=1000(node) gid=1000(node) groups=1000(node)
+
+# b) o segredo não vazou para dentro da imagem
+docker compose exec api sh -c 'ls -a | grep "^\.env" || echo "nenhum .env na imagem"'
+# nenhum .env na imagem
+
+# c) toda linha do log é JSON — nada de banner do dotenv
+docker compose logs api --no-log-prefix | head -3</code></pre>
+  <p>E o desligamento, que é o que amarra esta parte com a anterior:</p>
+  <pre><code>time docker stop $(docker compose ps -q api)
+# real  0m0,19s      <- com o handler da parte 20
+
+docker compose logs api --no-log-prefix | tail -2
+# {"level":"info",...,"sinal":"SIGTERM","msg":"desligando"}
+# {"level":"info",...,"msg":"conexões encerradas"}</code></pre>
+  <p>Se esse <code>time</code> der por volta de 10 segundos, o SIGTERM não está sendo tratado — volte na parte 20, seção 13.</p>
+
+  <h2 id="erros-comuns">14. Erros comuns</h2>
+  <ol>
+    <li><strong><code>COPY . .</code> sem <code>.dockerignore</code></strong> — o <code>.env</code> entra na imagem, e imagem é distribuída. É a versão em container do problema que a auditoria da parte anterior encontrou no git.</li>
+    <li><strong>Ignorar <code>docs/</code> ou <code>migrations/</code></strong> — os dois são código de aplicação aqui. O primeiro quebra o boot; o segundo, o deploy (seção 2).</li>
+    <li><strong><code>COPY . .</code> antes do <code>npm ci</code></strong> — joga fora o cache de dependências a cada alteração de código (seção 4).</li>
+    <li><strong>Rodar como root</strong> — é o padrão, e é preciso escrever <code>USER node</code> para sair dele (seção 6).</li>
+    <li><strong>Aplicação sem handler de SIGTERM</strong> — 10 segundos a mais em todo deploy, com requisições cortadas no fim (seção 7).</li>
+    <li><strong><code>HEALTHCHECK</code> com <code>curl</code></strong> — não existe na imagem alpine. E apontar o health check do Docker para a rota de <em>readiness</em> repete o erro da parte 20: um soluço do banco vira reinício de container.</li>
+    <li><strong><code>localhost</code> na <code>DATABASE_URL</code> dentro do container</strong> — <code>localhost</code> é o próprio container. Use o nome do serviço (seção 11).</li>
+    <li><strong>Migration no <code>CMD</code></strong> — quebra com mais de uma réplica (seção 12).</li>
+    <li><strong><code>npm install</code> em vez de <code>npm ci</code></strong> — build deixa de ser reproduzível, exatamente como na parte 17.</li>
+    <li><strong>Esquecer o <code>quiet: true</code> no dotenv</strong> — uma linha não-JSON no começo de todo log (seção 9).</li>
+  </ol>
+
+  <h2 id="proximos-passos">15. O que vem a seguir</h2>
+  <p>A aplicação está empacotada e sobe com um comando. Falta o último passo: ela existir num endereço que não seja o seu computador.</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Deploy com HTTPS</strong> — escolher onde hospedar, banco gerenciado em vez de container, variáveis de ambiente na plataforma, migrations como passo do deploy (seção 12), e o momento em que três coisas da trilha finalmente entram em ação: <code>trust proxy</code> para o rate limit contar o IP certo (parte 9), <code>Secure</code> no cookie de refresh (parte 11) e o <code>X-Request-Id</code> vindo do balanceador (parte 20).</li>
+    </ol>
+  </div>
+  <p>É a última parte do projeto.</p>
+
+  <footer class="closing">
+    <p>O momento que vale a pena aqui é apagar o <code>node_modules</code> da sua máquina, rodar <code>docker compose up -d --build</code> e ver a API responder do mesmo jeito. É a primeira vez que o projeto não depende de nada que você configurou à mão. Volta com dúvidas, principalmente se o build ficar lento (provável ordem das camadas) ou se a API não achar o banco (provável <code>localhost</code> onde deveria estar <code>db</code>).</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

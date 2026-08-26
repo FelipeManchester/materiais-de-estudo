@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Logs e health check</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="19-documentacao-openapi.html">&larr; 19. Documentação com OpenAPI</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-problema">1. O que o console.log não resolve</a></li>
+    <li><a href="#estruturado">2. A linha vira objeto</a></li>
+    <li><a href="#pino">3. pino</a></li>
+    <li><a href="#logger">4. O logger do projeto</a></li>
+    <li><a href="#redaction">5. O que nunca pode ir para o log</a></li>
+    <li><a href="#por-requisicao">6. Uma linha por requisição</a></li>
+    <li><a href="#request-id">7. Request id</a></li>
+    <li><a href="#ligando">8. Ligando no app.js</a></li>
+    <li><a href="#pretty">9. Lendo o log em desenvolvimento</a></li>
+    <li><a href="#vivo-pronto">10. Vivo não é o mesmo que pronto</a></li>
+    <li><a href="#rotas-health">11. As duas rotas</a></li>
+    <li><a href="#armadilhas">12. Onde montar, e a armadilha do rate limit</a></li>
+    <li><a href="#sigterm">13. Desligar direito</a></li>
+    <li><a href="#testando">14. Testando</a></li>
+    <li><a href="#erros-comuns">15. Erros comuns</a></li>
+    <li><a href="#proximos-passos">16. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="21-empacotando-com-docker.html">21. Empacotando com Docker &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 20</div>
+  <h1>Logs e health check</h1>
+  <p class="subtitle">A API funciona, está testada e documentada. Falta ela saber contar o que aconteceu quando você não estava olhando — e saber responder, para quem a hospeda, se está de pé. São as duas conversas que uma aplicação tem com a plataforma onde roda.</p>
+
+  <h2 id="o-problema">1. O que o console.log não resolve</h2>
+  <p>Hoje o projeto tem exatamente dois registros: um <code>console.log</code> dizendo que o servidor subiu, e um <code>console.error(err)</code> no middleware de erro. Em desenvolvimento isso basta, porque você está olhando o terminal no momento em que a coisa quebra.</p>
+  <p>Em produção nada disso é verdade. O erro acontece às três da manhã, para um usuário que você não conhece, e você chega depois. A pergunta deixa de ser "o que apareceu no terminal" e passa a ser <strong>"o que aconteceu naquele pedido"</strong> — e aí o <code>console</code> falha em quatro pontos:</p>
+  <table>
+    <thead><tr><th>Pergunta</th><th>Com <code>console.error</code></th></tr></thead>
+    <tbody>
+      <tr><td>Que requisição gerou esse erro?</td><td>Não dá para saber: a stack não diz a rota, o método nem o usuário.</td></tr>
+      <tr><td>Quantos 500 aconteceram ontem?</td><td>Só contando à mão, se você tiver guardado a saída.</td></tr>
+      <tr><td>Mostre só os erros do aluno 42.</td><td>Impossível — o texto não tem estrutura para filtrar.</td></tr>
+      <tr><td>Essa rota ficou lenta?</td><td>Ninguém mediu.</td></tr>
+    </tbody>
+  </table>
+  <p>E tem um problema mais sério que a inconveniência: <code>console.error(err)</code> despeja o objeto inteiro. Se esse objeto carregar um corpo de requisição com senha, ou um header <code>Authorization</code>, a senha vai para o log — que costuma ser copiado, agregado e lido por muito mais gente do que o banco.</p>
+
+  <h2 id="estruturado">2. A linha vira objeto</h2>
+  <p>Log estruturado é uma ideia simples: em vez de escrever uma frase, escreva um <strong>objeto JSON por evento</strong>. A frase continua lá, no campo <code>msg</code> — mas ao lado dela vão campos nomeados, que uma máquina consegue filtrar.</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Texto</h4>
+      <pre><code>Erro ao matricular aluno 42 na aula 7</code></pre>
+      <p>Para achar "todos os erros da aula 7" só resta <code>grep</code>, e ele quebra no dia em que alguém mudar a frase.</p>
+    </div>
+    <div class="good">
+      <h4>Estruturado</h4>
+      <pre><code>{"level":"error","time":"2026-08-25T18:47:51.286Z",
+ "aluno_id":42,"aula_id":7,"msg":"erro ao matricular"}</code></pre>
+      <p>Vira consulta: <code>level = error AND aula_id = 7</code>. A frase pode mudar sem quebrar nada.</p>
+    </div>
+  </div>
+  <p>É por isso que praticamente todo agregador de log — Grafana Loki, Datadog, CloudWatch, o que a sua hospedagem oferecer — assume JSON. Você não precisa de nenhum deles hoje: o ganho já aparece localmente, e o dia em que precisar, o formato já está certo.</p>
+  <div class="rule">
+    <span class="tag">Log vai para o stdout, não para arquivo</span>
+    <p>A tentação é abrir um <code>logs/app.log</code>. Não faça. Em container, o processo escreve no <strong>stdout</strong> e quem coleta é a plataforma — Docker, Kubernetes, a hospedagem. Aplicação que gerencia arquivo de log precisa se preocupar com rotação, permissão e disco cheio, e nada disso é problema dela.</p>
+    <p>É o mesmo raciocínio da parte 1 com as variáveis de ambiente: a aplicação recebe e entrega pelo canal padrão, e quem a hospeda decide o resto.</p>
+  </div>
+
+  <h2 id="pino">3. pino</h2>
+  <p>O <strong>pino</strong> é a escolha usual em Node para isso: escreve JSON por padrão, é rápido o suficiente para não pesar no caminho da requisição, e tem um complemento — <code>pino-http</code> — que registra requisição e resposta sozinho.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Rodar</span> na raiz do projeto:</p>
+  </div>
+  <pre><code>npm install pino pino-http
+npm install --save-dev pino-pretty</code></pre>
+  <p>O <code>pino-pretty</code> entra como dependência de <strong>desenvolvimento</strong> de propósito: ele existe para deixar o log legível no seu terminal, e em produção o que se quer é o JSON cru.</p>
+
+  <h2 id="logger">4. O logger do projeto</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">logger.js</span> — arquivo novo, na raiz, ao lado do <code>app.js</code>:</p>
+  </div>
+  <pre><code>const pino = require('pino');
+
+const emProducao = process.env.NODE_ENV === 'production';
+
+const logger = pino({
+  // Em teste o log só polui a saída do Jest.
+  enabled: process.env.NODE_ENV !== 'test',
+
+  level: process.env.LOG_LEVEL || (emProducao ? 'info' : 'debug'),
+
+  // Sem isso, o nível sai como número (30, 50) em vez de nome.
+  formatters: {
+    level: (rotulo) =&gt; ({ level: rotulo }),
+  },
+
+  // Padrão do pino é epoch em milissegundos; ISO é legível por humano
+  // e entendido por qualquer agregador.
+  timestamp: pino.stdTimeFunctions.isoTime,
+
+  // Nada aqui pode chegar ao log, nem por acidente.
+  redact: {
+    paths: [
+      'req.headers.authorization',
+      'req.headers.cookie',
+      'res.headers["set-cookie"]',
+      // '*.campo' cobre um nível de aninhamento, NÃO a raiz do objeto.
+      // Por isso cada nome aparece duas vezes.
+      'senha',
+      '*.senha',
+      'senha_hash',
+      '*.senha_hash',
+      'access_token',
+      '*.access_token',
+      'refresh_token',
+      '*.refresh_token',
+    ],
+    censor: '[REDIGIDO]',
+  },
+
+  base: { servico: 'studio-fit-api' },
+});
+
+module.exports = logger;</code></pre>
+  <p>Quatro decisões que valem explicação:</p>
+  <table>
+    <thead><tr><th>Opção</th><th>Por quê</th></tr></thead>
+    <tbody>
+      <tr><td><code>enabled</code></td><td>Durante os testes (parte 16) o log só atrapalharia a saída do Jest. Desligado, o pino vira no-op — não é preciso mudar nada no código que loga.</td></tr>
+      <tr><td><code>level</code></td><td><code>debug</code> em desenvolvimento, <code>info</code> em produção. <code>LOG_LEVEL</code> permite subir o detalhe sem alterar código, que é o que você vai querer no meio de um incidente.</td></tr>
+      <tr><td><code>formatters.level</code></td><td>Sem isso o nível sai como número (<code>30</code>, <code>50</code>). Com isso sai <code>"info"</code>, <code>"error"</code> — pesquisável por quem não decorou a tabela do pino.</td></tr>
+      <tr><td><code>base</code></td><td>Carimba <code>servico</code> em todo evento. Quando os logs de várias aplicações caem no mesmo lugar, é o campo que separa os seus.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="redaction">5. O que nunca pode ir para o log</h2>
+  <p>O <code>redact</code> é a parte que merece atenção. Ele substitui o valor de certos caminhos por <code>[REDIGIDO]</code> antes de escrever — a rede de segurança contra o dia em que alguém logar um objeto grande demais sem olhar o que tem dentro.</p>
+  <p>E ele tem uma armadilha que só aparece testando. O caminho <code>'*.senha'</code> significa "a propriedade <code>senha</code> de qualquer objeto <strong>um nível abaixo da raiz</strong>". Ele <strong>não</strong> cobre a raiz. Veja o resultado antes de a lista estar completa:</p>
+  <pre><code>logger.info({ usuario: { email: 'a@b.com', senha: 'senha123' } }, 'aninhado');
+logger.info({ access_token: 'eyJhbG...', refresh_token: 'deadbeef' }, 'raiz');</code></pre>
+  <pre><code>{"usuario":{"email":"a@b.com","senha":"[REDIGIDO]"},"msg":"aninhado"}
+{"access_token":"eyJhbG...","refresh_token":"deadbeef","msg":"raiz"}</code></pre>
+  <div class="warn">
+    <p>O segundo passou inteiro. O token foi para o log em texto puro, e nada avisou — não há erro, não há warning. Por isso cada nome aparece <strong>duas vezes</strong> na lista do <code>logger.js</code>: <code>'senha'</code> e <code>'*.senha'</code>.</p>
+    <p>A lição maior: <code>redact</code> é rede de segurança, não a defesa principal. A defesa principal é a próxima seção — <strong>nomear o que entra no log</strong>, em vez de despejar o objeto e confiar que a lista de exclusão cobre tudo.</p>
+  </div>
+
+  <h2 id="por-requisicao">6. Uma linha por requisição</h2>
+  <p>O <code>pino-http</code> registra automaticamente cada requisição que entra e cada resposta que sai. Sem configurar nada ele já funciona — mas os padrões dele logam os headers inteiros, que é exatamente o que não se quer.</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">middlewares/registrarRequisicoes.js</span> — arquivo novo:</p>
+  </div>
+  <pre><code>const crypto = require('node:crypto');
+const pinoHttp = require('pino-http');
+
+const logger = require('../logger');
+
+const registrarRequisicoes = pinoHttp({
+  logger,
+
+  // Reaproveita o id que veio do proxy, se veio. É isso que permite seguir
+  // uma requisição por vários serviços; sem isso cada um inventa o seu.
+  genReqId(req, res) {
+    const doProxy = req.headers['x-request-id'];
+    const id = doProxy || crypto.randomUUID();
+    res.setHeader('X-Request-Id', id);
+    return id;
+  },
+
+  // O orquestrador bate no /health a cada poucos segundos. Sem isso,
+  // o log vira uma parede de health check.
+  autoLogging: {
+    ignore: (req) =&gt; req.url.startsWith('/health'),
+  },
+
+  customLogLevel(req, res, err) {
+    if (err || res.statusCode &gt;= 500) return 'error';
+    if (res.statusCode &gt;= 400) return 'warn';
+    return 'info';
+  },
+
+  customSuccessMessage(req, res) {
+    return `${req.method} ${req.originalUrl} ${res.statusCode}`;
+  },
+
+  serializers: {
+    req: (req) =&gt; ({
+      id: req.id,
+      metodo: req.method,
+      url: req.originalUrl || req.url,
+      ip: req.remoteAddress,
+    }),
+    res: (res) =&gt; ({ status: res.statusCode }),
+  },
+});
+
+module.exports = registrarRequisicoes;</code></pre>
+  <p>Os <code>serializers</code> são o ponto central: eles definem <strong>exatamente</strong> quais campos de <code>req</code> e <code>res</code> vão para o log. Tudo que não estiver ali simplesmente não é escrito — headers, cookies e corpo inclusive. É a defesa por lista de permissão, e é mais confiável que a lista de exclusão da seção anterior.</p>
+  <p>O <code>customLogLevel</code> resolve outra coisa: sem ele, um <code>401</code> e um <code>200</code> saem no mesmo nível. Com ele, dá para filtrar <code>level &gt;= warn</code> e ver só o que deu errado.</p>
+  <div class="callout">
+    <p><code>autoLogging.ignore</code> existe por um motivo prático que você só descobre em produção: o orquestrador bate no <code>/health</code> a cada poucos segundos, para sempre. Sem o filtro, o log vira uma parede de health check e o evento que importa se perde no meio.</p>
+  </div>
+
+  <h2 id="request-id">7. Request id</h2>
+  <p>Cada requisição ganha um identificador, e ele aparece em toda linha de log daquela requisição. É o que transforma um log em algo investigável: com um id em mãos, você filtra e vê a história inteira de um pedido só.</p>
+  <p>O <code>genReqId</code> faz duas coisas de uma vez:</p>
+  <ol>
+    <li><strong>Reaproveita o <code>X-Request-Id</code> que veio do proxy</strong>, se veio. Isso é o que permite seguir a mesma requisição por vários serviços — se cada um inventar o próprio id, a trilha quebra na fronteira.</li>
+    <li><strong>Devolve o id no header da resposta.</strong> Quando um usuário reclama de um erro, ele consegue te passar o id, e você vai direto na linha certa.</li>
+  </ol>
+  <pre><code># sem header: a API gera
+curl -s -D - -o /dev/null localhost:3000/aulas | grep -i x-request-id
+# X-Request-Id: c5b7af72-4dfa-4006-8468-18e9effa3834
+
+# com header: a API reaproveita
+curl -s -D - -o /dev/null -H 'X-Request-Id: trace-123' localhost:3000/aulas | grep -i x-request-id
+# X-Request-Id: trace-123</code></pre>
+  <p>Dentro de qualquer rota, <code>req.log</code> é um logger já carimbado com esse id. Logar de dentro de uma rota vira <code>req.log.warn({ aula_id }, 'aula lotada')</code>, e o id vem junto sem você passar nada.</p>
+
+  <h2 id="ligando">8. Ligando no app.js</h2>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">app.js</span> — dois <code>require</code> a mais, junto dos que já existem:</p>
+  </div>
+  <pre><code><span class="ln-ctx">const corsConfigurado = require('./middlewares/cors');</span>
+<span class="ln-add">const registrarRequisicoes = require('./middlewares/registrarRequisicoes');
+const { router: healthRouter } = require('./routes/health');</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">app.js</span> — o bloco de middlewares logo depois do <code>const app = express()</code>. A <strong>ordem importa</strong>, e os comentários dizem por quê:</p>
+  </div>
+  <pre><code><span class="ln-ctx">const app = express();</span>
+
+<span class="ln-add">// Primeiro de todos: assim até o que morre no rate limit aparece no log.
+app.use(registrarRequisicoes);
+</span>
+<span class="ln-ctx">app.use(helmet());
+app.use(corsConfigurado);</span>
+
+<span class="ln-add">// Antes do rate limit: as sondas do orquestrador batem a cada poucos
+// segundos e não podem ser barradas por ele.
+app.use('/health', healthRouter);
+</span>
+<span class="ln-ctx">app.use(limitadorGlobal);</span></code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">app.js</span> — no middleware de erro, no fim do arquivo, troque o <code>console.error</code>:</p>
+  </div>
+  <pre><code><span class="ln-del">  console.error(err);</span>
+<span class="ln-add">  req.log.error({ err }, 'erro não tratado');</span>
+<span class="ln-ctx">  res.status(500).json({ erro: 'Erro interno no servidor' });</span></code></pre>
+  <p>Duas coisas mudam aí. O erro passa a sair como JSON com stack em campo próprio, e — o que importa mais — passa a carregar o <strong>request id</strong>. Um <code>500</code> no log agora se liga à requisição que o causou.</p>
+
+  <h2 id="pretty">9. Lendo o log em desenvolvimento</h2>
+  <p>JSON de uma linha é ótimo para máquina e ruim para o seu terminal. O <code>pino-pretty</code> resolve isso como um <strong>filtro de saída</strong>, não como configuração da aplicação:</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">package.json</span> — no bloco <code>scripts</code>, faça o <code>dev</code> passar a saída pelo pretty:</p>
+  </div>
+  <pre><code>"scripts": {
+<span class="ln-del">  "dev": "nodemon index.js",</span>
+<span class="ln-add">  "dev": "nodemon index.js | pino-pretty",</span>
+<span class="ln-ctx">  "lint": "eslint .",</span>
+</code></pre>
+  <pre><code>[15:50:16.874] INFO: GET /aulas?limite=1 200
+    servico: "studio-fit-api"
+    req: {
+      "id": "4492e31e-d86f-4910-827e-58739097d23f",
+      "metodo": "GET",
+      "url": "/aulas?limite=1",
+      "ip": "::1"
+    }
+    res: {
+      "status": 200
+    }
+    responseTime: 22</code></pre>
+  <p>Repare que a aplicação não sabe que o pretty existe: ela escreve JSON no stdout dos dois jeitos. Isso é de propósito — em produção não há pipe nenhum, e o JSON segue direto para quem coleta.</p>
+
+  <h2 id="vivo-pronto">10. Vivo não é o mesmo que pronto</h2>
+  <p>Quem hospeda a sua API precisa perguntar como ela está, e a pergunta se divide em duas que têm consequências <strong>opostas</strong>:</p>
+  <table>
+    <thead><tr><th></th><th>Liveness — "está vivo?"</th><th>Readiness — "posso mandar tráfego?"</th></tr></thead>
+    <tbody>
+      <tr><td>Rota</td><td><code>GET /health</code></td><td><code>GET /health/ready</code></td></tr>
+      <tr><td>Verifica</td><td>Nada além do próprio processo</td><td>As dependências — aqui, o banco</td></tr>
+      <tr><td>Se falhar</td><td>O container é <strong>reiniciado</strong></td><td>Para de <strong>receber tráfego</strong>, mas continua vivo</td></tr>
+    </tbody>
+  </table>
+  <div class="warn">
+    <p><strong>A liveness não pode consultar o banco.</strong> É o erro mais comum nessa parte, e ele é destrutivo: se o Postgres piscar por trinta segundos, o <code>/health</code> passa a falhar, o orquestrador conclui que a aplicação travou e <strong>mata o container</strong> — que sobe de novo, tenta o banco, falha de novo, e entra em ciclo de reinício. Um problema de trinta segundos no banco vira uma indisponibilidade total da API.</p>
+    <p>Reiniciar o processo não conserta um banco fora do ar. Por isso o banco é assunto da readiness: ela tira a instância do balanceador enquanto o problema dura, e devolve quando passa, sem matar ninguém.</p>
+  </div>
+
+  <h2 id="rotas-health">11. As duas rotas</h2>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">routes/health.js</span> — arquivo novo:</p>
+  </div>
+  <pre><code>const express = require('express');
+const pool = require('../db/pool');
+
+const router = express.Router();
+
+// Vira true quando o processo começa a desligar (SIGTERM).
+let desligando = false;
+const iniciarDesligamento = () =&gt; {
+  desligando = true;
+};
+
+// LIVENESS — "o processo está vivo?"
+// Não toca em banco, nem em rede, nem em disco de propósito: se responder
+// 503 aqui, o orquestrador MATA o container.
+router.get('/', (req, res) =&gt; {
+  res.json({
+    status: 'ok',
+    uptime_segundos: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// READINESS — "dá para me mandar tráfego?"
+// Aqui sim o banco entra: sem banco a API não serve para nada, mas o
+// processo continua saudável e não precisa ser reiniciado.
+router.get('/ready', async (req, res) =&gt; {
+  if (desligando) {
+    return res.status(503).json({ status: 'desligando' });
+  }
+
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok', banco: 'ok' });
+  } catch (err) {
+    req.log.error({ err }, 'readiness falhou: banco inacessível');
+    res.status(503).json({ status: 'indisponivel', banco: 'inacessivel' });
+  }
+});
+
+module.exports = { router, iniciarDesligamento };</code></pre>
+  <p>O módulo exporta <strong>dois</strong> valores em vez de só o router: o <code>iniciarDesligamento</code> é o que a seção 13 vai usar para a readiness começar a recusar tráfego antes de o processo fechar a porta.</p>
+  <p>Repare também no <code>req.log.error</code> dentro do <code>catch</code>: quando a readiness falha, o motivo fica registrado com request id. Sem isso você teria um <code>503</code> sem explicação.</p>
+  <div class="callout">
+    <p><code>SELECT 1</code> é de propósito a consulta mais barata possível. A readiness roda a cada poucos segundos, para sempre — qualquer coisa mais pesada aí vira carga constante no banco. E ela responde a "o pool consegue falar com o Postgres", que é tudo que precisa responder.</p>
+  </div>
+
+  <h2 id="armadilhas">12. Onde montar, e a armadilha do rate limit</h2>
+  <p>O <code>app.use('/health', healthRouter)</code> da seção 8 está posicionado <strong>antes</strong> do <code>limitadorGlobal</code>, e isso não é detalhe de estilo.</p>
+  <p>O limitador da parte 9 permite 300 requisições por IP a cada 15 minutos. A sonda do orquestrador vem sempre do mesmo IP e bate a cada poucos segundos: em 15 minutos são umas 300 chamadas só dela. Montado depois do limitador, o <code>/health</code> começaria a responder <code>429</code> — e o orquestrador, que só entende "não respondeu 200", reiniciaria um container perfeitamente saudável.</p>
+  <div class="rule">
+    <span class="tag">O padrão por trás disso</span>
+    <p>É a terceira vez na trilha que a ordem dos middlewares muda o comportamento: o rate limit antes do body parser (parte 9), o log antes do rate limit (seção 8), o health check antes do limitador (aqui). Middleware em Express é uma fila, e o que vem antes decide se o de trás chega a rodar.</p>
+  </div>
+  <p>Colocar o log em primeiro lugar tem a mesma lógica invertida: você <em>quer</em> que ele rode antes de tudo, para que uma requisição barrada por rate limit também apareça no log. Se ela não aparecer, um ataque de força bruta bem-sucedido em barrar seus usuários fica invisível.</p>
+
+  <h2 id="sigterm">13. Desligar direito</h2>
+  <p>Quando a plataforma precisa parar a sua aplicação — deploy novo, escala para baixo, container movido de máquina — ela não mata o processo de imediato. Ela manda <strong>SIGTERM</strong> e espera alguns segundos.</p>
+  <p>O padrão do Node é morrer na hora ao receber SIGTERM. Isso significa: requisições em andamento cortadas no meio, transações abertas abandonadas, conexões do pool derrubadas sem aviso ao Postgres.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.js</span> — <strong>substitua o arquivo inteiro</strong>. Ele é pequeno e muda quase todo:</p>
+  </div>
+  <pre><code>require('dotenv').config();
+
+const app = require('./app');
+const logger = require('./logger');
+const pool = require('./db/pool');
+const { iniciarDesligamento } = require('./routes/health');
+
+const PORT = process.env.PORT || 3000;
+
+const servidor = app.listen(PORT, () =&gt; {
+  logger.info({ porta: Number(PORT) }, 'servidor no ar');
+});
+
+// O orquestrador manda SIGTERM e espera. Se o processo sair na hora,
+// as requisições em andamento morrem no meio.
+function desligar(sinal) {
+  logger.info({ sinal }, 'desligando');
+
+  // Readiness passa a responder 503: o balanceador para de mandar
+  // tráfego novo antes de a porta fechar.
+  iniciarDesligamento();
+
+  servidor.close(async () =&gt; {
+    await pool.end();
+    logger.info('conexões encerradas');
+    process.exit(0);
+  });
+
+  // Rede de segurança: se algo travar, não fica pendurado para sempre.
+  setTimeout(() =&gt; {
+    logger.error('desligamento demorou demais, saindo à força');
+    process.exit(1);
+  }, 10_000).unref();
+}
+
+process.on('SIGTERM', () =&gt; desligar('SIGTERM'));
+process.on('SIGINT', () =&gt; desligar('SIGINT'));</code></pre>
+  <p>A ordem do desligamento é o que importa:</p>
+  <ol>
+    <li><code>iniciarDesligamento()</code> — a readiness passa a responder <code>503</code>. O balanceador para de mandar requisição nova para esta instância <em>antes</em> de ela fechar a porta.</li>
+    <li><code>servidor.close()</code> — para de aceitar conexões, mas <strong>deixa terminar</strong> as que já estão em andamento.</li>
+    <li><code>pool.end()</code> — só depois disso as conexões com o banco são devolvidas.</li>
+    <li>O <code>setTimeout</code> de 10 segundos é a rede de segurança: se alguma requisição travar, o processo sai à força em vez de ficar pendurado até a plataforma perder a paciência e mandar SIGKILL.</li>
+  </ol>
+  <p>O <code>.unref()</code> no timer é o detalhe que faz diferença: sem ele, o próprio <code>setTimeout</code> segura o processo vivo pelos 10 segundos inteiros, mesmo quando tudo já fechou em 50 milissegundos.</p>
+
+  <h2 id="testando">14. Testando</h2>
+  <pre><code># 1) o log saiu estruturado?
+#    (direto pelo node: o "npm run dev" agora passa pelo pino-pretty)
+node index.js
+# {"level":"info","time":"2026-08-25T18:47:48.421Z","servico":"studio-fit-api",
+#  "porta":3000,"msg":"servidor no ar"}
+
+# 2) uma requisição vira uma linha, com id e tempo
+curl -s -o /dev/null "localhost:3000/aulas?limite=1"
+# {"level":"info",...,"req":{"id":"89a0e895-...","metodo":"GET",
+#  "url":"/aulas?limite=1","ip":"::1"},"res":{"status":200},"responseTime":8,
+#  "msg":"GET /aulas?limite=1 200"}
+
+# 3) erro do cliente sobe de nível sozinho
+curl -s -o /dev/null localhost:3000/alunos
+# "level":"warn" ... "res":{"status":401}
+
+# 4) o health check NÃO aparece no log
+curl -s localhost:3000/health
+# {"status":"ok","uptime_segundos":3,"timestamp":"..."}
+# (nenhuma linha nova no log — é o autoLogging.ignore)</code></pre>
+  <p>O teste que fecha a aula é o da seção 10. Suba a API apontando para um banco que não existe e compare as duas rotas:</p>
+  <pre><code>DATABASE_URL=postgresql://postgres:errada@localhost:5432/estudo node index.js
+
+curl -s -o /dev/null -w '%{http_code}\n' localhost:3000/health
+# 200   <- o processo está vivo; NÃO reinicie
+
+curl -s -o /dev/null -w '%{http_code}\n' localhost:3000/health/ready
+# 503   <- não mande tráfego para cá por enquanto
+curl -s localhost:3000/health/ready
+# {"status":"indisponivel","banco":"inacessivel"}</code></pre>
+  <p>E o desligamento, que é mais fácil de ver com o processo em segundo plano:</p>
+  <pre><code>node index.js &amp; PID=$!
+sleep 2
+kill -TERM $PID
+
+# {"level":"info",...,"sinal":"SIGTERM","msg":"desligando"}
+# {"level":"info",...,"msg":"conexões encerradas"}</code></pre>
+  <p>Por fim, <code>npm test</code> deve continuar verde — e <strong>sem nenhuma linha de log na saída</strong>, graças ao <code>enabled: false</code> em ambiente de teste.</p>
+
+  <h2 id="erros-comuns">15. Erros comuns</h2>
+  <ol>
+    <li><strong>Liveness que consulta o banco</strong> — um soluço no Postgres vira ciclo de reinício do container (seção 10). É o erro mais caro desta parte.</li>
+    <li><strong>Health check depois do rate limit</strong> — as sondas tomam <code>429</code> e o orquestrador reinicia uma aplicação saudável (seção 12).</li>
+    <li><strong>Confiar só no <code>redact</code></strong> — <code>'*.campo'</code> não cobre a raiz do objeto, e a falha é silenciosa (seção 5). Nomeie o que entra no log em vez de listar o que sai.</li>
+    <li><strong>Logar o objeto <code>req</code> inteiro</strong> — vai junto o header <code>Authorization</code>, o cookie de refresh e o corpo com senha. Use serializers.</li>
+    <li><strong>Escrever log em arquivo</strong> — em container, escreva no stdout e deixe a plataforma coletar (seção 2).</li>
+    <li><strong>Deixar o <code>pino-pretty</code> em produção</strong> — ele é dependência de desenvolvimento; o agregador quer o JSON cru.</li>
+    <li><strong>Não logar o health check e também não logar o motivo do <code>503</code></strong> — filtrar a sonda é certo, mas a falha da readiness precisa aparecer.</li>
+    <li><strong>Esquecer o <code>.unref()</code> no timer de desligamento</strong> — o processo demora os 10 segundos inteiros para sair, sempre.</li>
+    <li><strong><code>process.exit()</code> direto no SIGTERM</strong> — mata requisição em andamento no meio. É o que o Node já faz sozinho, e é o que a seção 13 veio evitar.</li>
+  </ol>
+
+  <h2 id="proximos-passos">16. O que vem a seguir</h2>
+  <p>A API agora conta o que faz e responde por si. O que falta é ela existir fora do seu computador:</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Dockerfile do app</strong> — o Postgres roda em container desde a parte 1; a API, não. Empacotá-la é o que torna o deploy reproduzível: imagem multi-stage, usuário sem privilégio, <code>npm ci --omit=dev</code>, e o <code>HEALTHCHECK</code> apontando para a rota que esta parte criou.</li>
+      <li><strong>Deploy com HTTPS</strong> — variáveis de produção, banco gerenciado, migrations no processo de deploy (parte 14), e o momento em que <code>trust proxy</code> (parte 9), <code>Secure</code> no cookie (parte 11) e o <code>X-Request-Id</code> vindo do balanceador (seção 7) finalmente entram em ação.</li>
+    </ol>
+  </div>
+  <p>São dois problemas diferentes — empacotar e publicar —, então viram duas partes.</p>
+
+  <footer class="closing">
+    <p>O momento que vale a pena aqui é o teste do banco derrubado: ver o <code>/health</code> responder <code>200</code> enquanto o <code>/health/ready</code> responde <code>503</code>. Parece contraditório até você lembrar que são perguntas diferentes, com consequências opostas — e é essa distinção que evita que um problema pequeno no banco derrube a API inteira. Volta com dúvidas, principalmente se o log aparecer sem cor no <code>npm run dev</code> (o pipe do pretty) ou se alguma linha trouxer campo que não devia.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

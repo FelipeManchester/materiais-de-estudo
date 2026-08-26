@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deploy com HTTPS</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="21-empacotando-com-docker.html">&larr; 21. Empacotando com Docker</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-problema">1. O que muda ao sair do localhost</a></li>
+    <li><a href="#onde">2. Onde hospedar de graça</a></li>
+    <li><a href="#neon">3. O banco primeiro: Neon</a></li>
+    <li><a href="#ssl">4. SSL na string de conexão</a></li>
+    <li><a href="#trust-proxy">5. O rate limit que contava errado</a></li>
+    <li><a href="#ip-no-log">6. O IP que o log não mostrava</a></li>
+    <li><a href="#cookie">7. O cookie entre domínios</a></li>
+    <li><a href="#cors">8. CORS com a origem real</a></li>
+    <li><a href="#spec">9. A spec que ainda diz localhost</a></li>
+    <li><a href="#docs-publico">10. /docs em produção</a></li>
+    <li><a href="#render-yaml">11. render.yaml</a></li>
+    <li><a href="#migrations">12. Migrations no plano gratuito</a></li>
+    <li><a href="#deploy">13. O primeiro deploy</a></li>
+    <li><a href="#sem-downtime">14. Deploy sem downtime</a></li>
+    <li><a href="#testando">15. Testando</a></li>
+    <li><a href="#erros-comuns">16. Erros comuns</a></li>
+    <li><a href="#fim">17. Fim do projeto</a></li>
+  </ol>
+</nav>
+
+<main>
+  <div class="eyebrow">Projeto Studio Fit — Trilha Node + Express — Parte 22</div>
+  <h1>Deploy com HTTPS</h1>
+  <p class="subtitle">A imagem está pronta e sobe com um comando. Falta ela existir num endereço que outra pessoa consiga digitar. Esta parte publica a API — e liga três coisas que a trilha construiu e nunca chegaram a funcionar, porque em <code>localhost</code> elas não fazem sentido.</p>
+
+  <h2 id="o-problema">1. O que muda ao sair do localhost</h2>
+  <p>Em <code>localhost</code>, três coisas são verdade e deixam de ser em produção: você é o único usuário, ninguém está no meio do caminho, e tudo mora no mesmo endereço. Cada uma dessas quebras já tem código escrito na trilha esperando para entrar em ação.</p>
+  <table>
+    <thead><tr><th>Em localhost</th><th>Em produção</th><th>Construído na</th></tr></thead>
+    <tbody>
+      <tr><td>Cada requisição vem de um IP</td><td>Todas chegam pelo proxy, com o mesmo IP</td><td>Parte 9 — rate limit</td></tr>
+      <tr><td><code>http://</code>, sem criptografia</td><td><code>https://</code>, e o cookie pode exigir isso</td><td>Parte 11 — <code>Secure</code></td></tr>
+      <tr><td>Front e API no mesmo endereço</td><td>Domínios diferentes</td><td>Partes 9 e 11 — CORS e <code>SameSite</code></td></tr>
+      <tr><td>Você olha o terminal</td><td>Você lê o log depois</td><td>Parte 20 — <code>X-Request-Id</code></td></tr>
+    </tbody>
+  </table>
+  <p>Nenhuma dessas mudanças é grande. O que torna esta parte difícil é que as falhas são <strong>silenciosas</strong>: o rate limit continua "funcionando" contando errado, o cookie simplesmente não é gravado, e a doc continua abrindo apontando para o lugar errado. Nada quebra alto.</p>
+
+  <h2 id="onde">2. Onde hospedar de graça</h2>
+  <p>Plano gratuito é assunto que muda todo ano, então vale o critério em vez da lista: você precisa de <strong>dois</strong> serviços — algo que rode o container e algo que guarde o banco —, e a armadilha comum é uma plataforma que dá os dois de graça só por um tempo.</p>
+  <table>
+    <thead><tr><th>Plataforma</th><th>Situação</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Render</strong> (aplicação)</td><td>Plano gratuito sem cartão. A API hiberna quando fica ociosa; a primeira requisição depois disso leva cerca de um minuto.</td></tr>
+      <tr><td><strong>Neon</strong> (banco)</td><td>Postgres gratuito por tempo indeterminado, sem cartão. Escala a zero quando ninguém usa.</td></tr>
+      <tr><td>Postgres do Render</td><td><span class="badge badge-err">cuidado</span> A instância gratuita é <strong>apagada depois de 30 dias</strong>. Por isso o banco vai para o Neon.</td></tr>
+      <tr><td>Railway</td><td>Ótima experiência e nativa em Docker, mas US$ 5 de crédito por 30 dias e depois ~US$ 5/mês. Serve para experimentar, não para deixar no ar.</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <p>Separar aplicação e banco em plataformas diferentes não é gambiarra de plano gratuito — é como funciona na maioria das empresas. O banco tem ciclo de vida próprio: ele sobrevive a deploys, precisa de backup e de janela de manutenção. O <code>docker-compose.yml</code> da parte 21 continua sendo a forma de rodar tudo junto na <em>sua</em> máquina; em produção, os dois se separam.</p>
+  </div>
+
+  <h2 id="neon">3. O banco primeiro: Neon</h2>
+  <p>O banco vem antes porque a aplicação não sobe sem a <code>DATABASE_URL</code> dele.</p>
+  <ol>
+    <li>Crie a conta e um projeto. Escolha a região mais perto de onde a API vai rodar — cada ida ao banco atravessa essa distância.</li>
+    <li>Copie a connection string. Ela tem o formato <code>postgresql://usuario:senha@ep-alguma-coisa.regiao.aws.neon.tech/nomedobanco?sslmode=require</code>.</li>
+    <li>Guarde essa string. Ela é uma credencial — vale a mesma regra do <code>.env</code>: não vai para o repositório.</li>
+  </ol>
+  <p>Repare que o banco do Neon é <strong>alcançável pela internet</strong>, diferente do seu Postgres em container, que a parte 21 fechou dentro da rede do compose. É isso que permite rodar as migrations da sua máquina (seção 12) — e é também por isso que a senha dele importa muito mais.</p>
+
+  <h2 id="ssl">4. SSL na string de conexão</h2>
+  <p>O <code>?sslmode=require</code> no fim da URL não é decoração: o Neon recusa conexão sem TLS. A boa notícia é que o <code>pg</code> já entende esse parâmetro sozinho — não é preciso mexer em <code>db/pool.js</code>.</p>
+  <pre><code>const { parse } = require('pg-connection-string');
+parse('postgresql://u:s@ep-abc.neon.tech/estudo?sslmode=require').ssl
+// {}   &lt;- objeto vazio significa "SSL ligado, com verificação"</code></pre>
+  <div class="warn">
+    <p>Só que o <code>pg</code> avisa que isso vai mudar:</p>
+    <pre><code>SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are
+treated as aliases for 'verify-full'. In the next major version
+(pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt
+standard libpq semantics, which have weaker security guarantees.</code></pre>
+    <p>Hoje <code>require</code> valida o certificado; na próxima versão maior, deixará de validar — e a sua conexão ficaria vulnerável a interceptação sem nenhum aviso. Troque para <code>sslmode=verify-full</code> na URL que você colar no Render. É o comportamento atual, dito de forma explícita, e imune à mudança.</p>
+  </div>
+  <p>Você vai ver por aí a receita <code>ssl: { rejectUnauthorized: false }</code>. Ela desliga a verificação do certificado — ou seja, resolve o erro escondendo o problema. O Neon tem certificado válido; não há motivo para isso aqui.</p>
+
+  <h2 id="trust-proxy">5. O rate limit que contava errado</h2>
+  <p>Na parte 21, ao olhar o log do container, apareceu isto:</p>
+  <pre><code>"ip":"::ffff:172.18.0.1"</code></pre>
+  <p>Esse não é o IP de ninguém — é o gateway da rede Docker. Em produção acontece o mesmo com o proxy da hospedagem: todas as requisições chegam ao seu processo vindas do mesmo endereço, e o IP verdadeiro fica no header <code>X-Forwarded-For</code>.</p>
+  <p>O Express ignora esse header por padrão, e com razão: qualquer cliente pode forjá-lo. Confiar nele só é seguro quando existe um proxy conhecido na frente — que é exatamente o caso em produção.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">app.js</span> — logo depois do <code>const app = express()</code>, antes de qualquer <code>app.use</code>:</p>
+  </div>
+  <pre><code>const app = express();
+
+// Atrás do proxy da hospedagem, o IP de quem chega vem no X-Forwarded-For.
+// Sem isto, req.ip é sempre o do proxy — e o rate limit conta o mundo
+// inteiro como um usuário só.
+app.set('trust proxy', 1);
+
+app.use(registrarRequisicoes);</code></pre>
+  <p>O <code>1</code> quer dizer "confie em <strong>um</strong> proxy à minha frente" — o da hospedagem. Não use <code>true</code>: isso mandaria confiar na cadeia inteira, e aí qualquer um poderia forjar o próprio IP mandando o header, que é o cenário que o rate limit tenta impedir.</p>
+  <p>A diferença é mensurável. Duas requisições, de dois IPs diferentes, olhando o contador do <code>express-rate-limit</code>:</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Sem <code>trust proxy</code></h4>
+      <pre><code>RateLimit: limit=300, remaining=299
+RateLimit: limit=300, remaining=298</code></pre>
+      <p>O contador desceu. Os dois caíram no <strong>mesmo balde</strong> — para a API, é tudo o mesmo usuário. Um cliente abusivo esgota a cota de todo mundo.</p>
+    </div>
+    <div class="good">
+      <h4>Com <code>trust proxy</code></h4>
+      <pre><code>RateLimit: limit=300, remaining=299
+RateLimit: limit=300, remaining=299</code></pre>
+      <p>Cada IP tem o próprio balde. É o que a parte 9 sempre quis fazer, e nunca teve como.</p>
+    </div>
+  </div>
+
+  <h2 id="ip-no-log">6. O IP que o log não mostrava</h2>
+  <p>Com o <code>trust proxy</code> ligado, <code>req.ip</code> passa a valer o IP real dentro das rotas. Mas o log da parte 20 continua mostrando o do proxy — e isso é fácil de não perceber.</p>
+  <p>O motivo: o serializer do <code>pino-http</code> não recebe o request do Express diretamente. Ele recebe um invólucro, onde <code>remoteAddress</code> é o IP do <em>socket</em> — o do proxy, sempre. O request do Express fica em <code>req.raw</code>. Medindo os três campos ao mesmo tempo, com <code>X-Forwarded-For: 203.0.113.77</code>:</p>
+  <pre><code>{ "remoteAddress": "::1",
+  "req.ip":         undefined,
+  "req.raw.ip":     "203.0.113.77" }</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">middlewares/registrarRequisicoes.js</span> — no <code>serializers.req</code>, a linha do <code>ip</code>:</p>
+  </div>
+  <pre><code>    req: (req) =&gt; ({
+<span class="ln-ctx">      id: req.id,
+      metodo: req.method,
+      url: req.originalUrl || req.url,</span>
+<span class="ln-del">      ip: req.remoteAddress,</span>
+<span class="ln-add">      // req.raw é o request do Express; req.remoteAddress é o IP do socket,
+      // que atrás de um proxy é sempre o do proxy.
+      ip: (req.raw &amp;&amp; req.raw.ip) || req.remoteAddress,</span>
+<span class="ln-ctx">    }),</span></code></pre>
+  <p>Sem essa correção, todo log de produção registraria o mesmo IP para todo mundo — e a primeira vez que você precisasse investigar um abuso, descobriria que o dado não está lá.</p>
+
+  <h2 id="cookie">7. O cookie entre domínios</h2>
+  <p>O refresh token mora num cookie desde a parte 11, com <code>secure</code> ligado só em produção e <code>sameSite: 'lax'</code>. Os dois valores precisam de atenção agora.</p>
+  <p>O <code>secure</code> resolve sozinho: em produção é <code>true</code>, e como o Render serve HTTPS, o cookie passa a trafegar criptografado. Era isso que a parte 11 estava esperando.</p>
+  <p>O <code>sameSite</code> é o problema. Ele quer dizer "só mande este cookie em requisições vindas do mesmo site" — e o seu front-end vai estar em outro domínio (algo como <code>studio-fit.vercel.app</code>, com a API em <code>studio-fit-api.onrender.com</code>). Para o navegador, são <strong>sites diferentes</strong>. Com <code>lax</code>, o cookie de refresh nunca é enviado, e a renovação de sessão simplesmente não funciona — sem erro, sem log, sem nada.</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">services/tokenService.js</span> — a função <code>opcoesCookieRefresh</code> inteira:</p>
+  </div>
+  <pre><code>function opcoesCookieRefresh() {
+  const emProducao = process.env.NODE_ENV === 'production';
+
+  // Front e API em domínios diferentes exigem SameSite=None — e o
+  // navegador só aceita None junto com Secure.
+  const entreSites = process.env.COOKIE_CROSS_SITE === 'true';
+
+  return {
+    httpOnly: true,
+    secure: emProducao || entreSites,
+    sameSite: entreSites ? 'none' : 'lax',
+    path: '/auth',
+    maxAge: DIAS_DE_VALIDADE * 24 * 60 * 60 * 1000,
+  };
+}</code></pre>
+  <p>Os três cenários, medidos:</p>
+  <pre><code>dev local                          secure=false | sameSite=lax
+produção, mesmo site               secure=true  | sameSite=lax
+produção, front em outro domínio   secure=true  | sameSite=none</code></pre>
+  <div class="warn">
+    <p><code>SameSite=None</code> só é aceito pelo navegador junto com <code>Secure</code> — por isso <code>secure</code> também liga quando <code>COOKIE_CROSS_SITE</code> está ativo. Um cookie <code>None</code> sem <code>Secure</code> é <strong>descartado em silêncio</strong>, e você fica olhando um login que "não guarda a sessão".</p>
+    <p>E vale ter claro o que se perde: <code>SameSite=None</code> desliga a proteção contra CSRF que o <code>lax</code> dava de graça. A parte 11 já explicava que essa defesa era parcial aqui; agora ela some. Se um dia o front e a API ficarem sob o mesmo domínio (com a API em <code>/api</code>), volte para <code>lax</code> — é estritamente melhor.</p>
+  </div>
+
+  <h2 id="cors">8. CORS com a origem real</h2>
+  <p>O middleware da parte 9 lê <code>CORS_ORIGINS</code> do ambiente, então não há código a mudar — só configuração. Duas coisas precisam estar certas:</p>
+  <pre><code>CORS_ORIGINS=https://studio-fit.vercel.app</code></pre>
+  <ul>
+    <li><strong>Com <code>https://</code>, sem barra no fim.</strong> Origem é o trio esquema + host + porta. <code>https://site.com/</code> com barra não casa com <code>https://site.com</code>.</li>
+    <li><strong>Nunca <code>*</code>.</strong> O <code>cors</code> está com <code>credentials: true</code> desde a parte 11, e o navegador recusa a combinação de curinga com credenciais — a requisição falha inteira.</li>
+  </ul>
+  <p>Enquanto o front não existir, deixe a variável com a URL da própria API. Ela some do caminho do Swagger UI (que é mesma origem) e não libera ninguém.</p>
+
+  <h2 id="spec">9. A spec que ainda diz localhost</h2>
+  <p>A documentação da parte 19 declara onde a API responde. Publicada como está, o botão <em>Try it out</em> dispararia contra a máquina de quem abriu a página:</p>
+  <pre><code>servers: [{ url: 'http://localhost:3000', description: 'Desenvolvimento' }],</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">docs/openapi.js</span> — o <code>servers</code>:</p>
+  </div>
+  <pre><code>  servers: [
+    {
+      url: process.env.PUBLIC_URL || 'http://localhost:3000',
+      description: process.env.PUBLIC_URL ? 'Produção' : 'Desenvolvimento',
+    },
+  ],</code></pre>
+  <p>Sem <code>PUBLIC_URL</code> definida, tudo continua como antes na sua máquina. Com ela, a doc publicada aponta para o endereço certo:</p>
+  <pre><code>curl -s https://studio-fit-api.onrender.com/docs.json | jq .servers
+# [{"url":"https://studio-fit-api.onrender.com","description":"Produção"}]</code></pre>
+
+  <h2 id="docs-publico">10. /docs em produção</h2>
+  <p>A parte 19 deixou essa decisão em aberto. Agora ela precisa ser tomada, porque a página vai estar acessível para qualquer um que descubra a URL.</p>
+  <table>
+    <thead><tr><th>Deixar público</th><th>Fechar</th></tr></thead>
+    <tbody>
+      <tr><td>Quem for consumir a API se vira sozinho.</td><td>Uma pessoa a menos sabendo os nomes dos campos e as regras de validação.</td></tr>
+      <tr><td>Você testa qualquer rota pelo navegador, sem <code>curl</code>.</td><td>Não entrega o mapa de <code>/auth/login</code>, <code>/instrutores</code> e da matriz de papéis.</td></tr>
+    </tbody>
+  </table>
+  <p>Para este projeto — que é de estudo, público no GitHub e vai servir de referência para o seu próprio front — deixar aberto é a escolha razoável. A spec não expõe dado de ninguém; expõe o formato, que o código no GitHub já mostra.</p>
+  <p>Se um dia isso mudar, o corte é uma linha em <code>app.js</code>, envolvendo as duas rotas num <code>if (process.env.NODE_ENV !== 'production')</code>. Registre a decisão conscientemente, é só isso que esta seção pede.</p>
+
+  <h2 id="render-yaml">11. render.yaml</h2>
+  <p>Dá para configurar tudo clicando no painel do Render. O problema é o mesmo do <code>schema.sql</code> da parte 14: configuração que só existe numa interface não tem histórico, não tem revisão e não sobrevive a "alguém mudou e não avisou".</p>
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">render.yaml</span> — arquivo novo, na raiz:</p>
+  </div>
+  <pre><code>services:
+  - type: web
+    name: studio-fit-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # sync: false = o Render pergunta o valor na primeira vez e guarda
+      # cifrado. Não fica no repositório.
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+
+      # Gerado pelo Render, forte, e que ninguém precisa ver.
+      - key: JWT_SECRET
+        generateValue: true
+
+      # Front e API em domínios diferentes: o cookie de refresh precisa
+      # de SameSite=None (parte 11).
+      - key: COOKIE_CROSS_SITE
+        value: 'true'</code></pre>
+  <p>Duas linhas merecem destaque.</p>
+  <p><code>healthCheckPath: /health</code> aponta para a rota de <strong>liveness</strong> da parte 20 — a que não consulta o banco. Apontar para <code>/health/ready</code> aqui repetiria o erro que aquela parte inteira existe para evitar: um soluço no Neon viraria reinício da aplicação.</p>
+  <p><code>sync: false</code> quer dizer "este valor não está no arquivo". O Render pergunta na primeira vez e guarda cifrado. É o que permite versionar a configuração <strong>sem</strong> versionar segredo — a mesma separação do <code>.env.example</code>.</p>
+  <div class="callout">
+    <p><code>generateValue: true</code> no <code>JWT_SECRET</code> faz o Render sortear um valor forte que nem você precisa ver. Bom motivo para usar: um segredo que ninguém digitou é um segredo que ninguém vaza. Só lembre que trocá-lo invalida todos os access tokens em circulação.</p>
+  </div>
+
+  <h2 id="migrations">12. Migrations no plano gratuito</h2>
+  <p>A parte 21 avisou: migration é passo de <strong>deploy</strong>, não de <strong>boot</strong>. Colocá-la no <code>CMD</code> quebra assim que existir mais de uma réplica.</p>
+  <p>O lugar certo no Render seria o <code>preDeployCommand</code>, que roda uma vez por deploy, antes de a versão nova receber tráfego. Só que ele <strong>é exclusivo dos planos pagos</strong>. No plano gratuito, o passo de deploy é você:</p>
+  <pre><code>DATABASE_URL='postgresql://...@ep-abc.neon.tech/estudo?sslmode=verify-full' \
+  npm run migrate:up</code></pre>
+  <p>Roda da sua máquina, apontando para o Neon — que é alcançável pela internet (seção 3). Funciona porque o <code>node-pg-migrate</code> só precisa de uma conexão; não importa de onde ela sai.</p>
+  <div class="warn">
+    <p>A ordem importa e não é a intuitiva: <strong>migre antes de publicar o código novo</strong>. Se o código novo subir esperando uma coluna que ainda não existe, ele quebra até você migrar. O contrário — banco com uma coluna a mais que o código antigo ignora — é inofensivo.</p>
+    <p>É a mesma razão pela qual, em times, migrations precisam ser compatíveis com a versão anterior do código: durante um deploy existe um intervalo em que as duas versões rodam ao mesmo tempo.</p>
+  </div>
+
+  <h2 id="deploy">13. O primeiro deploy</h2>
+  <ol>
+    <li><strong>Suba as mudanças</strong> desta parte para o GitHub. O Render lê do repositório, então nada existe para ele antes disso.</li>
+    <li><strong>No Render</strong>, escolha <em>New &rarr; Blueprint</em> e aponte para o repositório. Ele acha o <code>render.yaml</code> e pergunta os valores marcados com <code>sync: false</code>.</li>
+    <li><strong>Responda as três variáveis:</strong>
+      <ul>
+        <li><code>DATABASE_URL</code> — a string do Neon, com <code>sslmode=verify-full</code></li>
+        <li><code>PUBLIC_URL</code> — a URL que o Render acabou de te dar</li>
+        <li><code>CORS_ORIGINS</code> — a origem do front, ou a própria URL da API por enquanto</li>
+      </ul>
+    </li>
+    <li><strong>Rode as migrations</strong> (seção 12) enquanto a primeira build acontece.</li>
+    <li><strong>Acompanhe o build.</strong> Ele executa o mesmo <code>Dockerfile</code> da parte 21 — se funcionou na sua máquina, funciona ali.</li>
+  </ol>
+  <p>O primeiro deploy demora alguns minutos, porque nenhuma camada está em cache no servidor do Render. Os seguintes aproveitam o cache do <code>npm ci</code> exatamente como a seção 4 daquela parte descreveu.</p>
+
+  <h2 id="sem-downtime">14. Deploy sem downtime</h2>
+  <p>Esta seção não tem nada para fazer — é uma conferência do que já está pronto. Quando o Render publica uma versão nova, a sequência é:</p>
+  <ol>
+    <li>Sobe o container novo e espera o <code>healthCheckPath</code> responder <code>200</code>. É o <code>/health</code> da parte 20.</li>
+    <li>Passa a mandar tráfego para o novo.</li>
+    <li>Manda <strong>SIGTERM</strong> para o antigo.</li>
+    <li>O antigo marca a readiness como <code>503</code>, termina as requisições em andamento, fecha o pool e sai — em torno de 0,2 s, como medido na parte 21.</li>
+    <li>Se demorar demais, SIGKILL.</li>
+  </ol>
+  <p>Os quatro pontos que a plataforma toca são código que você escreveu nas partes 20 e 21: a rota de liveness, a de readiness, o handler de SIGTERM e o <code>CMD</code> em forma exec. Nenhum deles fazia diferença visível em <code>localhost</code>. Todos fazem agora.</p>
+
+  <h2 id="testando">15. Testando</h2>
+  <p>Troque <code>SUA_URL</code> pelo endereço que o Render deu.</p>
+  <pre><code># 1) está no ar, e em HTTPS
+curl -s https://SUA_URL/health
+# {"status":"ok","uptime_segundos":42,"timestamp":"..."}
+
+# 2) o banco do Neon respondeu
+curl -s https://SUA_URL/health/ready
+# {"status":"ok","banco":"ok"}     &lt;- 503 aqui = DATABASE_URL errada
+
+# 3) as migrations rodaram
+curl -s -o /dev/null -w "%{http_code}\n" https://SUA_URL/aulas
+# 200   (500 = tabela não existe: faltou a seção 12)
+
+# 4) a doc aponta para o lugar certo
+curl -s https://SUA_URL/docs.json | grep -o '"servers":\[[^]]*\]'
+# "servers":[{"url":"https://SUA_URL","description":"Produção"}]</code></pre>
+  <p>Os dois testes que só existem em produção:</p>
+  <pre><code># 5) o certificado é válido (sem -k, e sem erro)
+curl -sI https://SUA_URL/health | head -1
+# HTTP/2 200
+
+# 6) o cookie de refresh saiu com Secure e SameSite=None
+curl -s -D - -o /dev/null -X POST https://SUA_URL/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"seu@email.com","senha":"suasenha"}' | grep -i set-cookie
+# set-cookie: refresh_token=...; Path=/auth; HttpOnly; Secure; SameSite=None</code></pre>
+  <p>Se o <code>Secure</code> ou o <code>SameSite=None</code> não aparecerem, o front vai logar e perder a sessão na primeira renovação — e sem nenhuma mensagem de erro.</p>
+  <div class="callout">
+    <p>No plano gratuito, a primeira requisição depois de um tempo parada leva cerca de um minuto: o container estava hibernando. Não é erro. Se estiver testando e achar que travou, espere e repita.</p>
+  </div>
+
+  <h2 id="erros-comuns">16. Erros comuns</h2>
+  <ol>
+    <li><strong>Esquecer o <code>trust proxy</code></strong> — o rate limit passa a contar todos os usuários como um só, e nada avisa (seção 5).</li>
+    <li><strong><code>trust proxy</code> com <code>true</code></strong> — confia na cadeia inteira, e aí qualquer um forja o próprio IP mandando <code>X-Forwarded-For</code>.</li>
+    <li><strong>Corrigir o <code>trust proxy</code> e esquecer o serializer do log</strong> — <code>req.ip</code> fica certo nas rotas e o log continua registrando o proxy (seção 6).</li>
+    <li><strong><code>SameSite=Lax</code> com front em outro domínio</strong> — o cookie de refresh nunca é enviado. Login funciona, sessão não sobrevive (seção 7).</li>
+    <li><strong><code>SameSite=None</code> sem <code>Secure</code></strong> — o navegador descarta o cookie sem dizer nada.</li>
+    <li><strong><code>CORS_ORIGINS</code> com barra no fim ou com <code>*</code></strong> — o primeiro não casa; o segundo é recusado por causa do <code>credentials: true</code> (seção 8).</li>
+    <li><strong><code>ssl: { rejectUnauthorized: false }</code></strong> — resolve o erro de conexão desligando a verificação do certificado. O Neon tem certificado válido: use <code>sslmode=verify-full</code> (seção 4).</li>
+    <li><strong>Migration depois de publicar o código novo</strong> — a versão nova quebra até você migrar. Migre antes (seção 12).</li>
+    <li><strong><code>healthCheckPath</code> apontando para <code>/health/ready</code></strong> — um problema no banco vira reinício da aplicação (seção 11).</li>
+    <li><strong>Deixar o Postgres gratuito do Render</strong> — some depois de 30 dias, com os dados (seção 2).</li>
+    <li><strong>Confundir hibernação com erro</strong> — o primeiro acesso depois de horas parado demora um minuto no plano gratuito.</li>
+  </ol>
+
+  <h2 id="fim">17. Fim do projeto</h2>
+  <p>Acabou. A API que começou como um <code>GET /alunos</code> devolvendo uma lista fixa na parte 4 agora está publicada, com HTTPS, autenticação por papel, transações, testes, CI, documentação navegável, log estruturado e deploy sem downtime.</p>
+  <p>Vale olhar o que cada parte deixou pronto para a seguinte usar — quase nada foi escrito duas vezes:</p>
+  <table>
+    <thead><tr><th>Construído em</th><th>Só entrou em ação em</th></tr></thead>
+    <tbody>
+      <tr><td>Rate limit por IP (parte 9)</td><td>Aqui, com <code>trust proxy</code></td></tr>
+      <tr><td>Cookie <code>Secure</code> (parte 11)</td><td>Aqui, com HTTPS</td></tr>
+      <tr><td>Migrations (parte 14)</td><td>Parte 21 no container, aqui no deploy</td></tr>
+      <tr><td>Rota de liveness (parte 20)</td><td>Parte 21 no <code>HEALTHCHECK</code>, aqui no <code>healthCheckPath</code></td></tr>
+      <tr><td>Handler de SIGTERM (parte 20)</td><td>Parte 21 no <code>docker stop</code>, aqui no deploy sem downtime</td></tr>
+      <tr><td><code>X-Request-Id</code> do proxy (parte 20)</td><td>Aqui, quando passou a existir um proxy</td></tr>
+    </tbody>
+  </table>
+  <div class="next-steps">
+    <p>O próximo projeto natural é o <strong>front-end</strong> que consome esta API. A parte 19 já deixou o contrato pronto para isso: abra <code>/docs</code>, teste a rota, veja a resposta real e só então escreva o cliente. E os pontos desta parte que ficaram provisórios — <code>CORS_ORIGINS</code> e <code>COOKIE_CROSS_SITE</code> — passam a ter valores de verdade no dia em que o front existir.</p>
+  </div>
+
+  <footer class="closing">
+    <p>O momento que vale a pena é o primeiro <code>curl https://.../health</code> respondendo de um endereço que não é o seu computador. Depois disso, vale reler a parte 1 da trilha de API REST: as seis restrições do Fielding vão significar coisas concretas agora, porque cada uma delas virou código que você escreveu. Volta com dúvidas quando o front começar — a conversa entre os dois é onde aparecem os problemas que nenhuma das duas pontas mostra sozinha.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>
