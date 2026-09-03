@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Conflitos de merge</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="04-branches.html">&larr; 4. Branches: trabalhar em paralelo</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#por-que">1. Por que conflito acontece</a></li>
+    <li><a href="#provocando">2. Provocando um conflito</a></li>
+    <li><a href="#travou">3. O Git travou. E agora?</a></li>
+    <li><a href="#marcadores">4. Lendo os marcadores</a></li>
+    <li><a href="#resolvendo">5. Resolvendo na mão</a></li>
+    <li><a href="#abort">6. <code>merge --abort</code>: desistir no meio</a></li>
+    <li><a href="#ours-theirs">7. <code>ours</code> e <code>theirs</code></a></li>
+    <li><a href="#diff3">8. Vendo a versão original também</a></li>
+    <li><a href="#editor">9. Resolvendo pelo editor</a></li>
+    <li><a href="#outros-tipos">10. Outros tipos de conflito</a></li>
+    <li><a href="#prevencao">11. O que reduz conflito num time</a></li>
+    <li><a href="#erros-comuns">12. Erros comuns nesta fase</a></li>
+    <li><a href="#checklist">13. Checklist antes de seguir</a></li>
+    <li><a href="#proximos-passos">14. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="06-repositorio-remoto.html">6. Repositório remoto: GitHub &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Material de estudo — Git na prática — Parte 5</div>
+  <h1>Conflitos de merge</h1>
+  <p class="subtitle">Todos os merges da aula 4 deram certo sozinhos — as mudanças estavam em arquivos e linhas diferentes, de propósito. Esta aula quebra isso. Conflito é a parte do Git que mais assusta quem está começando, e o motivo é quase sempre o mesmo: a pessoa nunca viu um <strong>de propósito, num lugar onde errar não custa nada</strong>. É o que vamos fazer aqui. No fim você vai ver conflito como o que ele é — uma pergunta que o Git faz porque não tem como adivinhar a resposta.</p>
+
+  <h2 id="por-que">1. Por que conflito acontece</h2>
+  <p>Quando o Git faz um merge, ele não compara só as duas pontas. Ele olha <strong>três</strong> versões do arquivo:</p>
+  <div class="layer-diagram">
+    <div class="layer"><strong>A base comum</strong><span>O último commit em que as duas branches eram iguais — onde elas se separaram</span></div>
+    <div class="layer"><strong>Sua versão</strong><span>Como o arquivo ficou na branch que está recebendo</span></div>
+    <div class="layer"><strong>A outra versão</strong><span>Como o arquivo ficou na branch que está vindo</span></div>
+  </div>
+  <p>Com essas três em mãos, ele resolve sozinho a maioria dos casos, porque consegue responder "o que cada lado <em>mudou</em> em relação à base":</p>
+  <ul>
+    <li>Só um lado mexeu num trecho? Aplica a mudança desse lado.</li>
+    <li>Os dois mexeram, mas em partes distantes do arquivo? Aplica as duas.</li>
+    <li>Os dois fizeram exatamente a mesma alteração? Aplica uma vez.</li>
+  </ul>
+  <p>O merge automático da aula 4 foi isso. Impressiona: dois arquivos, mudanças independentes, resolvido sem você.</p>
+  <div class="rule">
+    <span class="tag">Quando ele desiste</span>
+    <p>Conflito acontece quando <strong>as duas branches alteraram a mesma linha do mesmo arquivo de formas diferentes</strong>. Aí não existe resposta técnica: as duas mudanças são válidas, e escolher qual vale é decisão de quem escreveu o código. O Git para e pergunta.</p>
+  </div>
+  <p>Reformulando o mais importante: <strong>conflito não é erro, e não é sinal de que você fez algo errado.</strong> É o Git se recusando a adivinhar. A alternativa — escolher sozinho — seria muito pior: ele descartaria em silêncio o trabalho de alguém.</p>
+
+  <h2 id="provocando">2. Provocando um conflito</h2>
+  <p>Vamos fabricar um. Comece limpo:</p>
+  <pre><code>cd ~/projetos/guia-de-cafes
+git switch main
+git status</code></pre>
+
+  <h3>2.1 A branch</h3>
+  <pre><code>git switch -c titulo-descritivo</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.html</span> — na linha do <code>&lt;h1&gt;</code>, troque o texto do título:</p>
+  </div>
+  <pre><code>&lt;body&gt;
+<span class="ln-del">-  &lt;h1&gt;Guia de Cafés&lt;/h1&gt;</span>
+<span class="ln-add">+  &lt;h1&gt;Guia de Cafés: métodos e preparo&lt;/h1&gt;</span>
+  &lt;ul&gt;</code></pre>
+  <pre><code>git commit -am "Deixa o titulo mais descritivo"</code></pre>
+
+  <h3>2.2 A mesma linha, na main</h3>
+  <pre><code>git switch main</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.html</span> — <strong>a mesma linha do <code>&lt;h1&gt;</code></strong>, com um texto diferente:</p>
+  </div>
+  <pre><code>&lt;body&gt;
+<span class="ln-del">-  &lt;h1&gt;Guia de Cafés&lt;/h1&gt;</span>
+<span class="ln-add">+  &lt;h1&gt;O Guia do Café&lt;/h1&gt;</span>
+  &lt;ul&gt;</code></pre>
+  <pre><code>git commit -am "Encurta o titulo da pagina"</code></pre>
+  <p>Pronto: duas branches, duas versões diferentes da mesma linha. Exatamente o que acontece quando duas pessoas de um time mexem no mesmo trecho na mesma semana.</p>
+
+  <h3>2.3 O merge</h3>
+  <pre><code>git merge titulo-descritivo</code></pre>
+  <pre><code>Auto-merging index.html
+CONFLICT (content): Merge conflict in index.html
+Automatic merge failed; fix conflicts and then commit the result.</code></pre>
+  <p>Conflito. Leia a mensagem com calma, porque ela já diz tudo: qual arquivo (<code>index.html</code>), que tipo (<code>content</code>) e o que fazer (resolver e commitar).</p>
+
+  <h2 id="travou">3. O Git travou. E agora?</h2>
+  <p>Primeira coisa, sempre:</p>
+  <pre><code>git status</code></pre>
+  <pre><code>On branch main
+You have unmerged paths.
+  (fix conflicts and run "git commit")
+  (use "git merge --abort" to abort the merge)
+
+Unmerged paths:
+  (use "git add &lt;file&gt;..." to mark resolution)
+	both modified:   index.html
+
+no changes added to commit (use "git add" and/or "git commit -a")</code></pre>
+  <p>Três informações importantes aí:</p>
+  <ul>
+    <li><strong><code>You have unmerged paths</code></strong> — o repositório está num <strong>estado especial</strong>, no meio de um merge. Ele fica assim até você concluir ou abortar.</li>
+    <li><strong><code>both modified</code></strong> — a categoria nova do <code>status</code>, além das três da aula 2. Lista os arquivos que precisam da sua decisão.</li>
+    <li>As duas saídas possíveis, sugeridas pelo próprio Git: resolver e commitar, ou <code>git merge --abort</code>.</li>
+  </ul>
+  <div class="callout"><p><strong>Não há pressa e não há risco.</strong> Nesse estado, nada foi perdido: as duas versões estão guardadas nos commits de cada branch. Dá pra sair pra almoçar no meio de um conflito. O <code>git status</code> vai lembrar você de onde parou.</p></div>
+  <p>Um detalhe que ajuda: no meio do conflito o seu prompt do terminal pode mudar, mostrando algo como <code>(main|MERGING)</code>. É o shell avisando o estado. Se o seu não mostra, o <code>git status</code> diz a mesma coisa.</p>
+
+  <h2 id="marcadores">4. Lendo os marcadores</h2>
+  <p>O Git editou o <code>index.html</code> e escreveu as duas versões dentro dele. Abra o arquivo:</p>
+  <pre><code>&lt;body&gt;
+<span class="ln-ctx">&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</span>
+  &lt;h1&gt;O Guia do Café&lt;/h1&gt;
+<span class="ln-ctx">=======</span>
+  &lt;h1&gt;Guia de Cafés: métodos e preparo&lt;/h1&gt;
+<span class="ln-ctx">&gt;&gt;&gt;&gt;&gt;&gt;&gt; titulo-descritivo</span>
+  &lt;ul&gt;</code></pre>
+  <p>Isso é texto comum dentro do seu arquivo — nada mágico. Anatomia:</p>
+  <table>
+    <thead>
+      <tr><th>Marcador</th><th>Significa</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</code></td><td>Começa aqui a versão da <strong>branch em que você está</strong> (a que recebe)</td></tr>
+      <tr><td><code>=======</code></td><td>Divisória entre as duas versões</td></tr>
+      <tr><td><code>&gt;&gt;&gt;&gt;&gt;&gt;&gt; titulo-descritivo</code></td><td>Termina aqui a versão da <strong>branch que está vindo</strong>. O nome dela aparece no marcador</td></tr>
+    </tbody>
+  </table>
+  <p>O trecho entre <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> e <code>=======</code> é o seu lado. Entre <code>=======</code> e <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt;</code> é o lado que veio.</p>
+  <p>Se houver vários trechos em conflito no mesmo arquivo, cada um vem com seu próprio conjunto de marcadores. Todos precisam ser resolvidos.</p>
+  <div class="warn"><p>O arquivo, nesse estado, <strong>está quebrado</strong>. É HTML com lixo no meio; se fosse código, não compilaria. Isso é intencional — é praticamente impossível não perceber que existe conflito pendente. O acidente clássico é justamente commitar com os marcadores dentro; a seção 12 mostra como evitar.</p></div>
+
+  <h2 id="resolvendo">5. Resolvendo na mão</h2>
+  <p>Resolver significa uma coisa só: <strong>deixar o arquivo do jeito que ele deve ficar</strong>, e apagar os marcadores. Não existe comando que decida por você — a decisão é editorial.</p>
+  <p>Três saídas possíveis, e as três são legítimas:</p>
+  <div class="step">
+    <div class="step-number">1</div>
+    <h3>Fica a sua versão</h3>
+    <p>Apaga o outro lado e os três marcadores.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">2</div>
+    <h3>Fica a versão que veio</h3>
+    <p>Mesma coisa, ao contrário.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">3</div>
+    <h3>Fica uma terceira coisa</h3>
+    <p>Você combina as duas, ou escreve algo novo que resolve o que os dois lados queriam. É o caso mais comum em código de verdade.</p>
+  </div>
+  <p>Vamos pela terceira, que é a mais realista:</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.html</span> — apague as duas versões e os três marcadores, deixando só a linha final:</p>
+  </div>
+  <pre><code>&lt;body&gt;
+  &lt;h1&gt;O Guia do Café: métodos e preparo&lt;/h1&gt;
+  &lt;ul&gt;</code></pre>
+  <p>Confira que não sobrou marcador nenhum no arquivo:</p>
+  <pre><code>grep -n "&lt;&lt;&lt;&lt;&lt;&lt;&lt;\|=======\|&gt;&gt;&gt;&gt;&gt;&gt;&gt;" index.html</code></pre>
+  <p>Sem saída significa limpo.</p>
+
+  <h3>5.1 Marcando como resolvido</h3>
+  <pre><code>git add index.html</code></pre>
+  <p>Aqui o <code>add</code> tem um significado extra: além de colocar no staging, ele <strong>declara ao Git que aquele arquivo está resolvido</strong>. Era isso que o <code>status</code> dizia com <em>"use git add &lt;file&gt;... to mark resolution"</em>.</p>
+  <pre><code>git status</code></pre>
+  <pre><code>On branch main
+All conflicts fixed but you are still merging.
+  (use "git commit" to conclude merge)
+
+Changes to be committed:
+	modified:   index.html</code></pre>
+
+  <h3>5.2 Concluindo</h3>
+  <pre><code>git commit</code></pre>
+  <p>Sem <code>-m</code>: o Git abre o editor com a mensagem de merge já preenchida, listando os arquivos que tiveram conflito. Aceite como está — mensagem de merge é uma das poucas em que o padrão do Git é melhor que o improviso. Salve e feche.</p>
+  <pre><code>git log --oneline --graph -4</code></pre>
+  <pre><code>*   8f3c204 (HEAD -&gt; main) Merge branch 'titulo-descritivo'
+|\
+| * b1e7d59 (titulo-descritivo) Deixa o titulo mais descritivo
+* | 6a2f8c3 Encurta o titulo da pagina
+|/
+* e5b1f77 Merge branch 'rodape'</code></pre>
+  <p>Um merge commit normal, igual ao da aula 4 — com dois pais. Do ponto de vista do histórico, <strong>não sobra registro de que houve conflito</strong>: o merge commit apenas guarda o resultado que você decidiu.</p>
+  <p>Limpe a branch:</p>
+  <pre><code>git branch -d titulo-descritivo</code></pre>
+  <div class="callout"><p><strong>Alternativa ao <code>git commit</code>:</strong> <code>git merge --continue</code> faz exatamente a mesma coisa e é mais explícito sobre o que está acontecendo. Os dois existem; use o que preferir. O <code>--continue</code> volta na aula 8, no conflito durante rebase, onde ele <strong>não</strong> é opcional.</p></div>
+
+  <h2 id="abort">6. <code>merge --abort</code>: desistir no meio</h2>
+  <p>Nem todo conflito precisa ser resolvido na hora. Às vezes ele é maior do que se esperava, ou você percebe que mergeou a branch errada, ou simplesmente quer entender melhor antes de decidir.</p>
+  <pre><code>git merge --abort</code></pre>
+  <p>Isso <strong>desfaz o merge inteiro</strong> e devolve o repositório exatamente ao estado anterior ao comando <code>git merge</code>: sem marcadores nos arquivos, sem estado de merge, sem nada pela metade. É seguro e reversível — dá pra tentar o merge de novo depois.</p>
+  <p>Vale experimentar agora pra ver funcionando: refaça um conflito qualquer e aborte. Saber que essa saída existe muda a relação com conflito — <strong>nenhuma situação de merge é sem volta.</strong></p>
+  <div class="warn"><p>Uma ressalva: o <code>--abort</code> descarta também as edições que você tiver feito nos arquivos em conflito durante a resolução. Se você passou vinte minutos resolvendo um arquivo grande e abortar, esse trabalho vai junto. Ele desfaz o merge por completo, não só a parte automática.</p></div>
+
+  <h2 id="ours-theirs">7. <code>ours</code> e <code>theirs</code></h2>
+  <p>Quando o conflito é do tipo "quero um lado inteiro, sem editar nada", existem atalhos:</p>
+  <pre><code>git checkout --ours index.html      # fica a versão da branch atual
+git checkout --theirs index.html    # fica a versão da branch que veio
+git add index.html</code></pre>
+  <div class="rule">
+    <span class="tag">Qual é qual</span>
+    <p><strong><code>ours</code></strong> = a branch em que você está, a que <em>recebe</em> o merge. <strong><code>theirs</code></strong> = a branch que você mandou vir, no <code>git merge &lt;nome&gt;</code>.</p>
+    <p>Regra prática: <code>ours</code> é sempre o lado que aparece sob <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</code>.</p>
+  </div>
+  <p>Esses nomes confundem porque dependem de onde você está, não de quem escreveu o código. Se você está na <code>main</code> mergeando a branch de um colega, <code>ours</code> é a <code>main</code> — mesmo que o código dela tenha sido escrito por outra pessoa.</p>
+  <div class="warn"><p><strong>Use com parcimônia.</strong> Descartar um lado inteiro joga fora o trabalho de alguém sem ler. Faz sentido em arquivo gerado automaticamente, ou quando você tem certeza absoluta. Em código escrito à mão, o normal é abrir e decidir trecho por trecho.</p></div>
+
+  <h2 id="diff3">8. Vendo a versão original também</h2>
+  <p>Com dois lados na tela e nenhuma referência, às vezes falta a informação mais útil: <strong>como aquilo era antes de os dois mexerem</strong>. Saber isso costuma deixar óbvio qual lado mudou o quê.</p>
+  <p>O Git sabe mostrar, mas não vem ligado por padrão:</p>
+  <pre><code>git config --global merge.conflictStyle zdiff3</code></pre>
+  <p>Com isso, o conflito passa a ter três partes:</p>
+  <pre><code><span class="ln-ctx">&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</span>
+  &lt;h1&gt;O Guia do Café&lt;/h1&gt;
+<span class="ln-ctx">||||||| base</span>
+  &lt;h1&gt;Guia de Cafés&lt;/h1&gt;
+<span class="ln-ctx">=======</span>
+  &lt;h1&gt;Guia de Cafés: métodos e preparo&lt;/h1&gt;
+<span class="ln-ctx">&gt;&gt;&gt;&gt;&gt;&gt;&gt; titulo-descritivo</span></code></pre>
+  <p>O trecho entre <code>|||||||</code> e <code>=======</code> é a <strong>base comum</strong> — o original de onde os dois lados partiram. Agora dá pra ver que um lado encurtou e o outro acrescentou complemento.</p>
+  <p>É uma das configurações que mais valem a pena e quase ninguém conhece. <code>zdiff3</code> exige Git 2.35 ou superior; em versões mais antigas, use <code>diff3</code>.</p>
+
+  <h2 id="editor">9. Resolvendo pelo editor</h2>
+  <p>Na prática, quase ninguém resolve conflito apagando marcador na mão — o editor faz isso melhor. No VS Code, um arquivo em conflito mostra botões acima de cada trecho:</p>
+  <table>
+    <thead>
+      <tr><th>Botão</th><th>Equivale a</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Accept Current Change</td><td><code>ours</code> — o lado do <code>HEAD</code></td></tr>
+      <tr><td>Accept Incoming Change</td><td><code>theirs</code> — o lado que veio</td></tr>
+      <tr><td>Accept Both Changes</td><td>Mantém os dois, um depois do outro</td></tr>
+      <tr><td>Compare Changes</td><td>Abre os dois lado a lado</td></tr>
+    </tbody>
+  </table>
+  <p>Os botões só apagam os marcadores e deixam o que você escolheu — o resultado é idêntico a editar na mão. E, mesmo usando o editor, <strong>o <code>git add</code> continua sendo necessário</strong> pra marcar como resolvido, e o commit pra concluir.</p>
+  <div class="callout"><p><strong>Cuidado com "Accept Both".</strong> Ele empilha as duas versões, o que quase nunca é o que se quer — no nosso exemplo, resultaria em dois <code>&lt;h1&gt;</code> na página. É rápido e por isso tentador; leia o resultado antes de seguir.</p></div>
+  <p>Existe ainda <code>git mergetool</code>, que abre uma ferramenta gráfica de três painéis configurada à parte. Vale saber que existe; o editor resolve na esmagadora maioria dos casos.</p>
+
+  <h2 id="outros-tipos">10. Outros tipos de conflito</h2>
+  <p>"Mesma linha" é o caso mais comum, mas não é o único. Os outros aparecem menos e assustam mais, porque não trazem marcadores:</p>
+  <table>
+    <thead>
+      <tr><th>Situação</th><th>Como o Git mostra</th><th>Como resolver</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Um lado editou o arquivo, o outro deletou</td><td><code>deleted by them</code> ou <code>deleted by us</code></td><td>Decidir se o arquivo fica: <code>git add arquivo</code> pra manter, <code>git rm arquivo</code> pra apagar</td></tr>
+      <tr><td>Os dois criaram um arquivo com o mesmo nome</td><td><code>both added</code></td><td>Igual ao conflito de conteúdo: marcadores dentro do arquivo</td></tr>
+      <tr><td>Um lado renomeou, o outro editou</td><td>Aviso de <em>rename/modify</em></td><td>O Git costuma acertar sozinho; confira o resultado antes de commitar</td></tr>
+    </tbody>
+  </table>
+  <p>Em todos, o caminho é o mesmo: <code>git status</code> pra ver a categoria, decidir, <code>git add</code> (ou <code>git rm</code>) pra marcar, e commitar.</p>
+
+  <h2 id="prevencao">11. O que reduz conflito num time</h2>
+  <p>Conflito não se elimina — onde há duas pessoas no mesmo código, ele vai acontecer. O que se controla é a <strong>frequência</strong> e, principalmente, o <strong>tamanho</strong>. Um conflito de três linhas se resolve em um minuto; um de trezentos vira meio dia de trabalho e risco real de apagar coisa sem querer.</p>
+  <div class="step">
+    <div class="step-number">1</div>
+    <h3>Branch curta</h3>
+    <p>A medida mais eficaz, de longe. Uma branch que vive dois dias diverge pouco. Uma que vive três semanas acumula todas as mudanças que o resto do time fez nesse período — e cobra tudo de uma vez no merge.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">2</div>
+    <h3>Atualizar a branch com frequência</h3>
+    <p>Trazer a <code>main</code> pra dentro da sua branch periodicamente (<code>git merge main</code> estando nela) resolve os conflitos aos poucos, enquanto são pequenos, em vez de deixar tudo pro fim.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">3</div>
+    <h3>Commits pequenos e focados</h3>
+    <p>Aquilo da aula 2 sobre staging. Commit que mexe em uma coisa só gera conflito localizado e fácil de entender.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">4</div>
+    <h3>Combinar quem mexe onde</h3>
+    <p>Simples e subestimado. Duas pessoas reescrevendo o mesmo arquivo na mesma semana é problema de organização, não de ferramenta. Uma conversa de trinta segundos evita horas.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">5</div>
+    <h3>Formatação automática combinada</h3>
+    <p>Metade dos conflitos gigantes em time é formatação: seu editor reindenta o arquivo inteiro, e cada linha vira conflito. Ferramenta de formatação com configuração versionada no projeto elimina essa categoria inteira.</p>
+  </div>
+  <p>Os dois primeiros itens só ficam completos com o remoto, na aula 6 — atualizar a branch pressupõe ter de onde puxar novidade.</p>
+
+  <h2 id="erros-comuns">12. Erros comuns nesta fase</h2>
+  <ol>
+    <li><strong>Commitar com os marcadores dentro.</strong> O erro mais frequente, e chega a produção com <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> no meio do arquivo. Prevenção: rodar <code>git diff --staged</code> antes do commit (aula 3, seção 4.2) — os marcadores saltam aos olhos.</li>
+    <li><strong>Resolver um trecho e esquecer os outros.</strong> Arquivo grande pode ter vários blocos em conflito. O <code>git status</code> continua acusando enquanto sobrar algum.</li>
+    <li><strong>Apagar o marcador e esquecer o <code>git add</code>.</strong> O arquivo está certo, mas o Git ainda considera não resolvido. O <code>add</code> é o que marca a resolução.</li>
+    <li><strong>Entrar em pânico e apagar a pasta do projeto.</strong> Sempre há <code>git merge --abort</code>. Nada está perdido durante um conflito.</li>
+    <li><strong>Aceitar um lado inteiro sem ler.</strong> <code>--ours</code>/<code>--theirs</code> ou "Accept Current Change" por pressa descartam trabalho alheio em silêncio. Ninguém percebe até faltar a funcionalidade.</li>
+    <li><strong>Resolver conflito e não testar.</strong> O resultado é código que nunca existiu antes — a combinação de duas mudanças. Compila? Funciona? Rode o projeto antes de dar por encerrado.</li>
+  </ol>
+
+  <h2 id="checklist">13. Checklist antes de seguir</h2>
+  <div class="checklist">
+    <ul>
+      <li>Você provocou um conflito de propósito e resolveu até o commit final</li>
+      <li>Sabe explicar por que o Git resolve alguns merges sozinho e outros não</li>
+      <li>Identifica os três marcadores e sabe qual lado é qual</li>
+      <li>Sabe que <code>git add</code> é o que marca um arquivo como resolvido</li>
+      <li>Já rodou <code>git merge --abort</code> e viu o repositório voltar ao normal</li>
+      <li>Sabe dizer o que são <code>ours</code> e <code>theirs</code> sem hesitar</li>
+      <li>Consegue citar duas práticas que reduzem conflito num time</li>
+    </ul>
+  </div>
+
+  <h2 id="proximos-passos">14. O que vem a seguir</h2>
+  <p>Metade da trilha. Você já sabe versionar, consultar, desfazer, trabalhar em paralelo e resolver conflito — tudo dentro da sua máquina. A partir da próxima aula o projeto sai daqui.</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Repositório remoto: GitHub</strong> — criar conta e repositório, SSH vs HTTPS com token, <code>remote add</code>, <code>push</code>, <code>clone</code>, a diferença entre <code>fetch</code> e <code>pull</code>, o push rejeitado por <em>non-fast-forward</em> e o que é uma branch de rastreamento.</li>
+      <li><strong>Fluxo de time</strong> — Pull Request, code review, e os modelos de fluxo que os times usam.</li>
+      <li><strong>Rebase</strong> — a outra forma de integrar branches, e o conflito durante rebase, que se resolve de um jeito diferente do desta aula.</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Vale provocar mais dois ou três conflitos no <code>guia-de-cafes</code> antes de seguir, resolvendo cada um de um jeito: um ficando com o seu lado, um com o outro, um combinando os dois — e um abortando no meio só pra ver o repositório voltar ao normal. Conflito deixa de assustar quando vira rotina, e este é o único momento da sua vida em que ele não custa nada.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

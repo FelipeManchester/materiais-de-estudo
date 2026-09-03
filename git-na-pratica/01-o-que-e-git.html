@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>O que é Git e por que ele existe</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#problema">1. O problema, antes da ferramenta</a></li>
+    <li><a href="#controle-de-versao">2. Controle de versão: as três gerações</a></li>
+    <li><a href="#historia">3. De onde veio o Git</a></li>
+    <li><a href="#distribuido">4. O que "distribuído" muda no seu dia</a></li>
+    <li><a href="#git-nao-e-github">5. Git não é GitHub</a></li>
+    <li><a href="#modelo-mental">6. O modelo mental: commits são fotografias</a></li>
+    <li><a href="#instalacao">7. Instalando o Git</a></li>
+    <li><a href="#config">8. Configuração inicial</a></li>
+    <li><a href="#ajuda">9. Como pedir ajuda ao próprio Git</a></li>
+    <li><a href="#projeto">10. O projeto que vamos usar na trilha</a></li>
+    <li><a href="#checklist">11. Checklist antes de seguir</a></li>
+    <li><a href="#proximos-passos">12. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="02-primeiro-repositorio.html">2. Primeiro repositório: o ciclo básico &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Material de estudo — Git na prática — Parte 1</div>
+  <h1>O que é Git e por que ele existe</h1>
+  <p class="subtitle">Nesta primeira aula não se digita nenhum comando de versionamento. O objetivo é você entender <strong>qual problema o Git resolve</strong>, <strong>por que ele foi feito do jeito que foi</strong> e <strong>como ele pensa internamente</strong> — porque quase toda confusão com Git mais adiante vem de um modelo mental errado, não de comando esquecido. No fim, você deixa a ferramenta instalada e configurada.</p>
+
+  <h2 id="problema">1. O problema, antes da ferramenta</h2>
+  <p>Antes de qualquer definição, vale reconhecer o problema. Você provavelmente já resolveu ele na mão:</p>
+  <pre><code>projeto/
+projeto-v2/
+projeto-v2-final/
+projeto-v2-final-AGORA-VAI/
+projeto-backup-antes-de-mexer/</code></pre>
+  <p>Isso é controle de versão manual. Funciona mal, e falha em pontos específicos:</p>
+  <ul>
+    <li><strong>Não dá pra saber o que mudou entre duas versões.</strong> Só abrindo as duas pastas e comparando arquivo por arquivo.</li>
+    <li><strong>Não dá pra saber <em>por que</em> mudou.</strong> A pasta guarda o resultado, não a intenção. Três meses depois, ninguém lembra por que aquela linha virou aquilo.</li>
+    <li><strong>Não dá pra voltar só um pedaço.</strong> Ou você volta a pasta inteira, ou copia trechos na mão e reza.</li>
+    <li><strong>Não escala pra mais de uma pessoa.</strong> Dois desenvolvedores mexendo na mesma pasta compartilhada sobrescrevem o trabalho um do outro em silêncio — o pior tipo de erro, porque não gera mensagem nenhuma.</li>
+  </ul>
+  <p>Um <strong>sistema de controle de versão</strong> (VCS, <em>Version Control System</em>) existe pra resolver exatamente esses quatro pontos: registrar o que mudou, por que mudou, quem mudou e quando, permitindo voltar a qualquer ponto anterior e combinar o trabalho de várias pessoas de forma controlada.</p>
+  <div class="callout"><p><strong>Reformulando:</strong> o Git não é uma ferramenta de "salvar backup". Ele é uma ferramenta de <strong>registrar história</strong>. Backup guarda o estado atual; história guarda a sequência de decisões que levou até ele. É essa diferença que faz o Git valer o esforço de aprender.</p></div>
+
+  <h2 id="controle-de-versao">2. Controle de versão: as três gerações</h2>
+  <p>O Git não apareceu do nada. Ele é a terceira geração de uma ideia, e entender as duas anteriores explica várias escolhas dele.</p>
+
+  <h3>2.1 Local (anos 80)</h3>
+  <p>Ferramentas como o <strong>RCS</strong> guardavam as versões de um arquivo numa base local, na mesma máquina. Resolvia o "voltar a versão anterior" de um arquivo só, para uma pessoa só. Não resolvia colaboração.</p>
+
+  <h3>2.2 Centralizado (anos 90 e 2000)</h3>
+  <p><strong>CVS</strong> e depois <strong>SVN</strong> (Subversion) trouxeram um <strong>servidor central</strong> que guarda todo o histórico do projeto. Cada desenvolvedor tem na máquina apenas uma <em>cópia de trabalho</em> — os arquivos na versão atual, sem o histórico. Para ver o log, comparar versões ou salvar uma alteração, é preciso falar com o servidor.</p>
+  <p>Isso resolveu colaboração, e por muitos anos foi o padrão da indústria. Mas trouxe limitações duras:</p>
+  <ul>
+    <li><strong>Servidor fora do ar = ninguém trabalha.</strong> Sem rede, não dá para salvar uma versão nem consultar o histórico.</li>
+    <li><strong>Servidor perdido = história perdida.</strong> O histórico existe num lugar só. Se o backup falhar, acabou.</li>
+    <li><strong>Criar branch é caro.</strong> No SVN, uma branch é uma operação no servidor, lenta em projeto grande. Consequência cultural: as pessoas evitavam criar branch. Todo mundo trabalhava no mesmo lugar, e as integrações eram raras, grandes e dolorosas.</li>
+  </ul>
+
+  <h3>2.3 Distribuído (2005 em diante)</h3>
+  <p>Git, Mercurial e outros inverteram a premissa: <strong>cada pessoa tem uma cópia completa do repositório</strong>, com todo o histórico, na própria máquina. O servidor deixa de ser a fonte única de verdade e vira apenas um ponto de encontro combinado entre as pessoas.</p>
+  <table>
+    <thead>
+      <tr><th>&nbsp;</th><th>Centralizado (SVN)</th><th>Distribuído (Git)</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Onde fica o histórico</td><td>Só no servidor</td><td>Em cada clone, completo</td></tr>
+      <tr><td>Salvar uma versão</td><td>Precisa de rede</td><td>Local e instantâneo</td></tr>
+      <tr><td>Ver o histórico</td><td>Precisa de rede</td><td>Local e instantâneo</td></tr>
+      <tr><td>Criar branch</td><td>Operação cara, evitada</td><td>Barata, feita o tempo todo</td></tr>
+      <tr><td>Servidor cai</td><td>Trabalho para</td><td>Trabalho continua; só não se compartilha</td></tr>
+      <tr><td>Servidor é perdido</td><td>Histórico some</td><td>Qualquer clone reconstrói tudo</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="historia">3. De onde veio o Git</h2>
+  <p>O Git foi escrito em <strong>2005</strong> por <strong>Linus Torvalds</strong> — o mesmo criador do Linux — e a história explica o desenho da ferramenta.</p>
+  <p>O kernel do Linux é desenvolvido por milhares de pessoas espalhadas pelo mundo, sem empresa única no comando, com um volume enorme de mudanças propostas por e-mail. Até 2005, o projeto usava um sistema distribuído proprietário chamado <strong>BitKeeper</strong>, cedido gratuitamente ao projeto. Nesse ano, a licença gratuita foi retirada após um desentendimento entre a empresa dona e parte da comunidade, e o kernel ficou de uma hora para outra sem ferramenta de versionamento.</p>
+  <p>Nenhuma alternativa da época atendia. Torvalds escreveu a própria, com um conjunto de requisitos declarados que valem ser lidos, porque cada um deles ainda está visível no Git de hoje:</p>
+  <table>
+    <thead>
+      <tr><th>Requisito de 2005</th><th>Como isso aparece hoje</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Ser rápido, mesmo com projeto gigante</td><td><code>git log</code> e <code>git status</code> respondem na hora, porque tudo é local</td></tr>
+      <tr><td>Suportar desenvolvimento distribuído em larga escala</td><td>Todo clone é um repositório completo e autônomo</td></tr>
+      <tr><td>Ter branch e merge <em>baratos</em></td><td>É cultura no Git criar uma branch para cada tarefa — algo impensável no SVN</td></tr>
+      <tr><td>Garantir integridade: história não pode ser corrompida em silêncio</td><td>Todo conteúdo é identificado por um hash criptográfico do próprio conteúdo</td></tr>
+    </tbody>
+  </table>
+  <p>A primeira versão utilizável nasceu em poucos dias, e o kernel do Linux passou a usá-la ainda em 2005. Sobre o nome: Torvalds descreveu de forma bem-humorada como "gíria britânica para pessoa desagradável", dizendo que costuma nomear projetos em homenagem a si mesmo.</p>
+  <div class="callout"><p><strong>Por que essa história importa pra você:</strong> o Git não foi desenhado para uma pessoa versionar um projeto pessoal. Foi desenhado para milhares de pessoas que <strong>não confiam totalmente umas nas outras</strong> colaborarem sem um servidor central mandando. É por isso que ele parece ter mais poder do que você precisa — e por isso o mercado inteiro conseguiu adotar ele para times de 3 ou de 3000 pessoas.</p></div>
+
+  <h2 id="distribuido">4. O que "distribuído" muda no seu dia</h2>
+  <p>Fora da teoria, ser distribuído tem quatro consequências práticas que você vai sentir já nas próximas aulas:</p>
+  <div class="step">
+    <div class="step-number">1</div>
+    <h3>Quase tudo funciona sem internet</h3>
+    <p>Registrar uma versão, ver o histórico, comparar, criar branch, voltar no tempo: tudo local. Só <em>trocar</em> trabalho com outras pessoas (as aulas 06 em diante) precisa de rede.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">2</div>
+    <h3>Salvar uma versão é barato, então salve com frequência</h3>
+    <p>Não existe motivo para acumular um dia de trabalho antes de registrar. Versões pequenas e frequentes são mais fáceis de entender, de reverter e de resolver conflito depois. Este é provavelmente o hábito que mais separa quem usa Git bem de quem sofre com ele.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">3</div>
+    <h3>Você tem uma cópia inteira do histórico da empresa na sua máquina</h3>
+    <p>Ao clonar o repositório de um time, você baixa toda a história do projeto, não só os arquivos atuais. Isso é ótimo para investigar ("quem mudou essa linha e por quê"), e é também o motivo de um segredo commitado ser um problema sério: quem clonou <strong>já tem</strong>. Voltamos a isso na aula 09.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">4</div>
+    <h3>O "servidor" é só uma convenção</h3>
+    <p>Do ponto de vista do Git, o repositório no GitHub não tem poder nenhum de especial — é mais um clone. Ele é a fonte de verdade porque <strong>o time combinou que é</strong>, não porque a ferramenta impõe.</p>
+  </div>
+
+  <h2 id="git-nao-e-github">5. Git não é GitHub</h2>
+  <p>Essa confusão é a mais comum de todas em quem está começando, e atrapalha porque mistura duas coisas com responsabilidades diferentes.</p>
+  <div class="scope-grid">
+    <div class="in">
+      <h4>Git</h4>
+      <ul>
+        <li>Programa que roda na sua máquina</li>
+        <li>Gratuito e de código aberto</li>
+        <li>Funciona sem internet e sem conta em lugar nenhum</li>
+        <li>Faz o versionamento: commits, branches, merges, histórico</li>
+        <li>Criado em 2005 por Linus Torvalds</li>
+      </ul>
+    </div>
+    <div class="out">
+      <h4>GitHub</h4>
+      <ul>
+        <li>Site/empresa que <em>hospeda</em> repositórios Git</li>
+        <li>Serviço comercial (hoje da Microsoft), com plano gratuito</li>
+        <li>Precisa de internet e de conta</li>
+        <li>Acrescenta o que o Git não tem: Pull Request, code review, issues, permissões, CI</li>
+        <li>Lançado em 2008 — três anos depois do Git</li>
+      </ul>
+    </div>
+  </div>
+  <p>Uma analogia que ajuda: <strong>Git está para GitHub assim como um editor de texto está para o Google Drive</strong>. O editor cria e edita o arquivo; o Drive hospeda, compartilha e deixa outras pessoas comentarem. Dá para usar o editor sem o Drive; o Drive sozinho não escreve nada.</p>
+  <p>Concorrentes diretos do GitHub são o <strong>GitLab</strong> e o <strong>Bitbucket</strong>. Todos hospedam o mesmo Git — o que muda é a interface e os recursos ao redor. Trocar de plataforma não exige reaprender Git, só reaprender o site.</p>
+  <div class="warn"><p>Perceba o que essa separação implica: <strong>Pull Request não é um conceito do Git</strong>. Não existe comando <code>git pull-request</code>. PR é um recurso inventado pelo GitHub em cima do Git, e por isso muda de nome entre plataformas (no GitLab chama-se <em>Merge Request</em>). Isso volta em detalhe na aula 07.</p></div>
+
+  <h2 id="modelo-mental">6. O modelo mental: commits são fotografias</h2>
+  <p>Esta seção é a mais importante da aula. Quase todo problema difícil com Git — nas aulas 03, 08 e 09, principalmente — fica simples quando este modelo está certo na cabeça, e fica impossível quando está errado.</p>
+
+  <h3>6.1 Snapshot, não lista de alterações</h3>
+  <p>A maioria dos sistemas anteriores guardava o histórico como uma <strong>lista de diferenças</strong>: o arquivo original mais um conjunto de alterações aplicadas em cima, uma após a outra.</p>
+  <p>O Git faz diferente. Cada versão salva é um <strong>snapshot do projeto inteiro naquele instante</strong> — como uma fotografia de todos os arquivos, não um bilhete dizendo "mudei a linha 12". Arquivo que não mudou não é duplicado: o Git guarda apenas uma referência ao conteúdo que já existia. Mas, conceitualmente, cada ponto do histórico é um estado completo do projeto.</p>
+  <div class="callout"><p><strong>Consequência prática:</strong> voltar a um ponto do histórico não é "desfazer alterações em ordem inversa". É apontar para uma fotografia que já está guardada inteira. Por isso operações que parecem drásticas no Git são rápidas — e por isso quase nada se perde de verdade (aula 09).</p></div>
+
+  <h3>6.2 O que é um commit</h3>
+  <p>Esse snapshot salvo tem um nome: <strong>commit</strong>. Você vai criar o primeiro na próxima aula; aqui interessa saber o que ele carrega:</p>
+  <table>
+    <thead>
+      <tr><th>Parte do commit</th><th>Para que serve</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>O snapshot do projeto</td><td>O estado completo dos arquivos naquele momento</td></tr>
+      <tr><td>Autor e data</td><td>Quem fez e quando — vem do <code>git config</code> que você faz na seção 8</td></tr>
+      <tr><td>Mensagem</td><td>O <em>porquê</em> da mudança. A única parte que o Git não consegue deduzir sozinho, e por isso a que mais depende de você</td></tr>
+      <tr><td>Referência ao commit anterior (o "pai")</td><td>É o que transforma commits soltos numa história encadeada</td></tr>
+      <tr><td>Um identificador (hash)</td><td>Código de 40 caracteres calculado a partir de todo o resto, ex.: <code>a1b2c3d...</code></td></tr>
+    </tbody>
+  </table>
+  <p>Como cada commit aponta para o anterior, o histórico do Git é uma <strong>corrente</strong> — e, quando há branches, um grafo. Nas aulas você vai ver isso desenhado assim, com o commit mais recente à direita:</p>
+  <pre><code>a1b2c3d ──&gt; e4f5g6h ──&gt; 9i8j7k6   (cada um aponta para o anterior)
+"cria a      "adiciona      "corrige o
+ página"      o rodapé"      título"</code></pre>
+
+  <h3>6.3 Por que o identificador é um hash</h3>
+  <p>Aquele código de 40 caracteres não é um número sequencial: é o resultado de uma função criptográfica (SHA-1) aplicada sobre <strong>o conteúdo do commit</strong> — arquivos, autor, data, mensagem e o hash do commit pai.</p>
+  <p>Isso tem um efeito importante: <strong>mudar qualquer coisa em um commit muda o hash dele</strong>, o que muda o hash de todos os commits seguintes, porque cada um inclui o hash do pai. Não existe alterar o passado em silêncio. Era exatamente o requisito de integridade da tabela da seção 3 — num projeto com milhares de contribuidores desconhecidos, é preciso poder confiar que a história recebida não foi adulterada no caminho.</p>
+  <p>Guarde isso, porque explica um comportamento que assusta muita gente na aula 08: quando você reescreve o histórico (com <code>rebase</code>), os commits não são "editados" — são <strong>recriados com hashes novos</strong>. E é por isso que reescrever histórico que outras pessoas já baixaram causa problema.</p>
+
+  <h3>6.4 Vocabulário mínimo</h3>
+  <p>Termos que aparecem daqui em diante. Não é preciso decorar agora; cada um ganha sua aula.</p>
+  <ul>
+    <li><strong>Repositório</strong> (ou "repo"): a pasta do projeto mais todo o histórico dela. Fica guardado numa subpasta oculta <code>.git</code>.</li>
+    <li><strong>Commit</strong>: um ponto salvo do histórico, como descrito acima.</li>
+    <li><strong>Branch</strong>: uma linha de trabalho paralela. Na prática, um ponteiro que anda para frente conforme você faz commits (aula 04).</li>
+    <li><strong>Merge</strong>: juntar o trabalho de duas branches (aula 04).</li>
+    <li><strong>Conflito</strong>: quando o Git não consegue juntar sozinho porque duas pessoas mudaram a mesma linha (aula 05).</li>
+    <li><strong>Remote</strong>: um repositório em outro lugar, geralmente no GitHub, com o qual o seu troca commits (aula 06).</li>
+    <li><strong>Clone</strong>: baixar um repositório inteiro, com histórico, para a sua máquina (aula 06).</li>
+    <li><strong>Push / Pull</strong>: enviar seus commits para o remote / trazer os commits dele (aula 06).</li>
+  </ul>
+
+  <h2 id="instalacao">7. Instalando o Git</h2>
+  <p>Antes de instalar, verifique se já existe — em muitas máquinas de desenvolvimento já vem:</p>
+  <pre><code>git --version</code></pre>
+  <p>Se responder algo como <code>git version 2.43.0</code>, está instalado. Qualquer versão <strong>2.30 ou superior</strong> serve para toda esta trilha. Se der "comando não encontrado", instale conforme o seu sistema.</p>
+
+  <h3>7.1 Linux (Ubuntu/Debian)</h3>
+  <pre><code>sudo apt update
+sudo apt install git</code></pre>
+  <p>Em Fedora, <code>sudo dnf install git</code>. Em Arch, <code>sudo pacman -S git</code>.</p>
+
+  <h3>7.2 macOS</h3>
+  <p>Com o <a href="https://brew.sh">Homebrew</a>:</p>
+  <pre><code>brew install git</code></pre>
+  <p>Sem o Homebrew, rodar <code>git --version</code> no Terminal faz o macOS oferecer a instalação das ferramentas de linha de comando do Xcode, que incluem o Git. Funciona, mas costuma trazer uma versão mais antiga.</p>
+
+  <h3>7.3 Windows</h3>
+  <p>Baixe o instalador em <a href="https://git-scm.com/download/win">git-scm.com/download/win</a> e siga o assistente. Os padrões sugeridos servem. Duas observações:</p>
+  <ul>
+    <li>Ele instala junto o <strong>Git Bash</strong>, um terminal com comandos no estilo Linux. <strong>Use ele</strong> para acompanhar a trilha — os comandos ficam idênticos aos do material.</li>
+    <li>Se estiver usando <strong>WSL</strong> (Linux dentro do Windows), instale pelo <code>apt</code> dentro do WSL, e trate como Linux.</li>
+  </ul>
+  <p>Depois de instalar, feche e abra o terminal, e confirme com <code>git --version</code>.</p>
+
+  <h2 id="config">8. Configuração inicial</h2>
+  <p>O Git recém-instalado ainda não sabe quem é você. Como cada commit registra autor, essa configuração é obrigatória antes do primeiro commit — que acontece na próxima aula.</p>
+
+  <h3>8.1 Os três níveis de configuração</h3>
+  <p>O Git lê configuração de três lugares, do mais amplo para o mais específico. O mais específico vence:</p>
+  <table>
+    <thead>
+      <tr><th>Nível</th><th>Flag</th><th>Vale para</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Sistema</td><td><code>--system</code></td><td>Todos os usuários da máquina. Raramente usado.</td></tr>
+      <tr><td>Global</td><td><code>--global</code></td><td>Todos os seus repositórios. <strong>É o que você vai usar.</strong></td></tr>
+      <tr><td>Local</td><td>(nenhuma flag)</td><td>Só o repositório atual. Útil para usar outro e-mail num projeto específico.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>8.2 Identidade</h3>
+  <p>Rode os dois comandos, trocando pelos seus dados:</p>
+  <pre><code>git config --global user.name "Seu Nome"
+git config --global user.email "seu@email.com"</code></pre>
+  <p>Esse par vai ficar gravado em <strong>todo commit que você fizer</strong>, para sempre. Use o nome pelo qual quer ser identificado profissionalmente — não é apelido de usuário, é o nome que aparece no histórico e no code review.</p>
+  <div class="warn">
+    <p><strong>Sobre o e-mail, um ponto de privacidade:</strong> o endereço fica gravado dentro do commit e, quando você publicar o repositório (aula 06), fica <strong>visível publicamente</strong> para qualquer pessoa. Não dá para remover depois sem reescrever todo o histórico.</p>
+    <p>Se preferir não expor seu e-mail pessoal, o GitHub oferece um endereço de encaminhamento no formato <code>id+usuario@users.noreply.github.com</code>, disponível em <em>Settings &rarr; Emails</em> depois que você criar a conta. É o e-mail que se usa aqui, e o GitHub continua associando os commits a você normalmente. Como a conta só é criada na aula 06, deixe o e-mail pessoal por enquanto ou volte neste ponto depois — os commits das primeiras aulas ficam na sua máquina.</p>
+  </div>
+
+  <h3>8.3 Nome da branch inicial</h3>
+  <pre><code>git config --global init.defaultBranch main</code></pre>
+  <p>Todo repositório começa com uma branch. Historicamente ela se chamava <code>master</code>; desde 2020, a indústria migrou para <code>main</code>, e é o padrão do GitHub e da maioria das empresas hoje. Sem essa configuração, o Git ainda cria <code>master</code> e imprime um aviso a cada repositório novo.</p>
+  <p>Vale saber que <strong>as duas são apenas nomes de branch</strong>, sem nada de especial na ferramenta. Você vai encontrar projetos antigos usando <code>master</code>, e isso não muda comando nenhum.</p>
+
+  <h3>8.4 Editor de texto</h3>
+  <p>Em algumas operações o Git abre um editor para você escrever ou revisar texto — mensagem de commit longa, resolução de merge, rebase interativo. O padrão em Linux e macOS costuma ser o <strong>Vim</strong>, que trava quem não conhece (para sair: <code>Esc</code>, depois <code>:q!</code>, depois <code>Enter</code>).</p>
+  <p>Se você usa VS Code, vale trocar:</p>
+  <pre><code>git config --global core.editor "code --wait"</code></pre>
+  <p>A flag <code>--wait</code> é essencial: sem ela, o VS Code devolve o controle ao Git na hora, e o Git entende que você fechou o editor sem escrever nada. Alternativas mais simples: <code>"nano"</code> em Linux/macOS, ou <code>"notepad"</code> no Windows.</p>
+
+  <h3>8.5 Conferindo o resultado</h3>
+  <pre><code>git config --global --list</code></pre>
+  <p>Deve sair algo assim:</p>
+  <pre><code>user.name=Seu Nome
+user.email=seu@email.com
+init.defaultbranch=main
+core.editor=code --wait</code></pre>
+  <p>Tudo isso está gravado em texto puro num arquivo chamado <code>~/.gitconfig</code> (no Windows, <code>C:\Users\SeuUsuario\.gitconfig</code>). Dá para abrir e editar na mão — os comandos acima são só uma forma conveniente de escrever nesse arquivo. Para consultar um valor específico:</p>
+  <pre><code>git config --global user.email</code></pre>
+
+  <h2 id="ajuda">9. Como pedir ajuda ao próprio Git</h2>
+  <p>Ninguém decora Git. O que separa quem se vira de quem trava é saber consultar rápido — e o Git traz a documentação completa junto com a instalação, sem internet:</p>
+  <pre><code>git help commit        # manual completo, abre como página de manual
+git commit -h          # resumo curto das opções, direto no terminal</code></pre>
+  <p>O primeiro abre um documento longo; navegue com as setas e saia com <code>q</code>. O segundo cabe na tela e resolve a maioria das dúvidas do tipo "qual era a flag mesmo?".</p>
+  <div class="callout"><p><strong>Hábito que vale desde já:</strong> quando um comando de Git der erro, <strong>leia a mensagem inteira antes de procurar no Google</strong>. As mensagens de erro do Git são incomumente boas: na maior parte dos casos elas dizem o que aconteceu e sugerem o comando exato para resolver. Copiar a sugestão sem ler é a origem da maioria dos acidentes com Git.</p></div>
+
+  <h2 id="projeto">10. O projeto que vamos usar na trilha</h2>
+  <p>A partir da próxima aula, tudo é feito em cima de um projeto único, construído do zero: um site estático simples chamado <strong><code>guia-de-cafes</code></strong>, com um <code>index.html</code> e um <code>README.md</code>.</p>
+  <p>O conteúdo dele é deliberadamente banal. Aqui se estuda Git, não HTML — e um projeto simples deixa provocar um conflito de merge de propósito (aula 05) numa linha de texto, sem ter que depurar código junto.</p>
+  <div class="warn">
+    <p><strong>Onde criar:</strong> o projeto vai numa pasta <strong>fora deste repositório de estudo</strong>, por exemplo <code>~/projetos/guia-de-cafes</code>.</p>
+    <p>O motivo é concreto: este material de estudo já é um repositório Git. Criar outro repositório dentro dele faz o Git de fora enxergar a pasta interna de um jeito estranho, e comandos como <code>git status</code> e <code>git log</code> passam a mostrar informação que não corresponde ao que a aula descreve — bem no momento em que você ainda não tem repertório para desconfiar da saída.</p>
+  </div>
+
+  <h2 id="checklist">11. Checklist antes de seguir</h2>
+  <p>Confira cada item no terminal. Se algum falhar, resolva antes da aula 02 — a próxima aula começa criando o repositório e assume tudo isto pronto.</p>
+  <div class="checklist">
+    <ul>
+      <li><code>git --version</code> responde com versão 2.30 ou superior</li>
+      <li><code>git config --global user.name</code> devolve o seu nome</li>
+      <li><code>git config --global user.email</code> devolve o seu e-mail</li>
+      <li><code>git config --global init.defaultBranch</code> devolve <code>main</code></li>
+      <li><code>git commit -h</code> mostra a lista de opções (confirma que a ajuda embutida funciona)</li>
+      <li>Você sabe explicar, com suas palavras, a diferença entre Git e GitHub</li>
+      <li>Você consegue dizer o que um commit guarda além dos arquivos</li>
+    </ul>
+  </div>
+
+  <h2 id="proximos-passos">12. O que vem a seguir</h2>
+  <p>Esta aula cobriu <strong>contexto, modelo mental e preparação do ambiente</strong>. A próxima entra no comando de verdade.</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Primeiro repositório: o ciclo básico</strong> — criar o <code>guia-de-cafes</code>, <code>git init</code>, os três estados de um arquivo (working directory, staging e repositório) e por que o staging existe, <code>status</code>, <code>add</code>, <code>commit</code>, <code>log</code>, e o <code>.gitignore</code> — incluindo por que ele parece não funcionar quando o arquivo já estava sendo rastreado.</li>
+      <li><strong>Navegando o histórico e desfazendo</strong> — a aula do "socorro, quero voltar atrás".</li>
+      <li><strong>Branches</strong> — trabalhar em paralelo sem pisar no trabalho de ninguém.</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Se ficou alguma dúvida conceitual aqui — por exemplo "por que o hash muda quando eu edito um commit antigo?" ou "se todo clone tem o histórico completo, quem manda afinal?" — vale esclarecer agora. São exatamente as perguntas que voltam a aparecer nas aulas 08 e 09, e resolvê-las cedo economiza confusão depois.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

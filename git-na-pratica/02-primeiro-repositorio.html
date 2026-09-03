@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Primeiro repositório: o ciclo básico</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="01-o-que-e-git.html">&larr; 1. O que é Git e por que ele existe</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#criando-projeto">1. Criando o projeto</a></li>
+    <li><a href="#git-init">2. <code>git init</code>: virando repositório</a></li>
+    <li><a href="#tres-areas">3. As três áreas do Git</a></li>
+    <li><a href="#status">4. <code>git status</code>: o comando mais usado</a></li>
+    <li><a href="#add">5. <code>git add</code>: preparando o commit</a></li>
+    <li><a href="#commit">6. <code>git commit</code>: o primeiro ponto salvo</a></li>
+    <li><a href="#ciclo">7. O ciclo completo, de novo</a></li>
+    <li><a href="#log">8. <code>git log</code>: lendo o histórico</a></li>
+    <li><a href="#mensagens">9. Mensagem de commit que presta</a></li>
+    <li><a href="#gitignore">10. <code>.gitignore</code>: o que não versionar</a></li>
+    <li><a href="#ja-rastreado">11. Quando o <code>.gitignore</code> "não funciona"</a></li>
+    <li><a href="#erros-comuns">12. Erros comuns nesta fase</a></li>
+    <li><a href="#checklist">13. Checklist antes de seguir</a></li>
+    <li><a href="#proximos-passos">14. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="03-historico-e-desfazendo.html">3. Navegando o histórico e desfazendo &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Material de estudo — Git na prática — Parte 2</div>
+  <h1>Primeiro repositório: o ciclo básico</h1>
+  <p class="subtitle">Aqui começa o comando de verdade. Você cria o projeto <code>guia-de-cafes</code> do zero, transforma ele em repositório e roda o ciclo <strong>editar &rarr; <code>status</code> &rarr; <code>add</code> &rarr; <code>commit</code></strong> algumas vezes, até ele virar automático. No meio do caminho, entende <strong>por que existe uma área intermediária</strong> entre seu arquivo e o histórico — a parte que confunde quem vem de outras ferramentas — e sai com um <code>.gitignore</code> funcionando, incluindo o caso em que ele parece ignorado.</p>
+
+  <h2 id="criando-projeto">1. Criando o projeto</h2>
+  <p>Antes do Git, o projeto. Lembrando da aula 1: ele mora <strong>fora deste repositório de estudo</strong>, pra não criar repositório dentro de repositório.</p>
+  <pre><code>mkdir -p ~/projetos/guia-de-cafes
+cd ~/projetos/guia-de-cafes</code></pre>
+  <p>No Windows com Git Bash, <code>~</code> aponta pra sua pasta de usuário do mesmo jeito. Confira onde você está com <code>pwd</code> — daqui em diante, <strong>todo comando desta aula roda de dentro dessa pasta</strong>.</p>
+
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">index.html</span> — arquivo novo, na raiz do projeto:</p>
+  </div>
+  <pre><code>&lt;!DOCTYPE html&gt;
+&lt;html lang="pt-BR"&gt;
+&lt;head&gt;
+  &lt;meta charset="UTF-8"&gt;
+  &lt;title&gt;Guia de Cafés&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;h1&gt;Guia de Cafés&lt;/h1&gt;
+  &lt;ul&gt;
+    &lt;li&gt;Espresso&lt;/li&gt;
+  &lt;/ul&gt;
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">README.md</span> — arquivo novo, na raiz do projeto:</p>
+  </div>
+  <pre><code># Guia de Cafés
+
+Lista de métodos e tipos de café.</code></pre>
+
+  <p>Pode criar pelo editor de texto ou pelo terminal, tanto faz. A pasta agora tem dois arquivos e <strong>nenhum controle de versão</strong> — é só uma pasta comum.</p>
+
+  <h2 id="git-init">2. <code>git init</code>: virando repositório</h2>
+  <pre><code>git init</code></pre>
+  <p>Saída:</p>
+  <pre><code>Initialized empty Git repository in /home/voce/projetos/guia-de-cafes/.git/</code></pre>
+  <p>Um comando, e a pasta virou repositório. O que mudou de concreto: apareceu uma subpasta oculta <code>.git</code>. Confira:</p>
+  <pre><code>ls -a</code></pre>
+  <pre><code>.  ..  .git  index.html  README.md</code></pre>
+  <p>Essa pasta <code>.git</code> <strong>é o repositório</strong>. Todo o histórico, todos os commits, todas as branches, a configuração local: tudo mora ali. Seus arquivos de trabalho continuam sendo arquivos normais na pasta, sem nada de especial.</p>
+  <div class="warn">
+    <p>Duas consequências que valem gravar:</p>
+    <p><strong>Apagar a pasta <code>.git</code> apaga todo o histórico</strong> e devolve uma pasta comum, com os arquivos na versão atual. Não existe lixeira. É a operação mais destrutiva desta aula, e ninguém pergunta se você tem certeza.</p>
+    <p><strong>Copiar a pasta do projeto leva o histórico junto</strong>, porque o <code>.git</code> vai junto. É por isso que um clone (aula 6) tem a história completa.</p>
+  </div>
+  <p>Não é preciso abrir o <code>.git</code> nem entender o formato dele — isso é o "plumbing" que a trilha declarou fora de escopo. Basta saber que é ali que o Git guarda tudo.</p>
+
+  <h2 id="tres-areas">3. As três áreas do Git</h2>
+  <p>Este é o conceito central da aula. Em ferramentas mais simples, salvar uma versão é um passo só. No Git são <strong>dois</strong>, e existe uma área intermediária entre o seu arquivo e o histórico:</p>
+
+  <div class="layer-diagram">
+    <div class="layer"><strong>Working directory</strong><span>Os arquivos como estão na pasta agora. Onde você edita.</span></div>
+    <div class="arrow"><code>git add</code> &darr;</div>
+    <div class="layer"><strong>Staging area</strong><span>Também chamada de <em>index</em>. O rascunho do próximo commit: o que você já escolheu incluir.</span></div>
+    <div class="arrow"><code>git commit</code> &darr;</div>
+    <div class="layer"><strong>Repositório</strong><span>O histórico, dentro de <code>.git</code>. Commits gravados, com hash e mensagem.</span></div>
+  </div>
+
+  <h3>3.1 Por que existe o staging</h3>
+  <p>A pergunta natural é: por que dois passos, se eu quase sempre quero commitar tudo que mudei?</p>
+  <p>Porque <strong>"tudo que mudei" e "uma mudança" raramente são a mesma coisa</strong>. Na prática, uma sessão de trabalho fica assim:</p>
+  <ul>
+    <li>Você foi implementar uma funcionalidade nova.</li>
+    <li>No caminho, corrigiu um erro de digitação num outro arquivo.</li>
+    <li>E mexeu num arquivo de configuração só pra testar uma coisa — que <em>não</em> deveria ir pro histórico.</li>
+  </ul>
+  <p>Sem staging, isso vira um commit só, com três assuntos misturados. Com staging, você monta o commit escolhendo o que entra: primeiro a funcionalidade, depois o erro de digitação em outro commit, e a alteração de teste fica de fora. O histórico resultante é legível — e reverter uma coisa não desfaz as outras (aula 3).</p>
+  <div class="callout"><p><strong>Modelo mental que ajuda:</strong> o staging é a <strong>caixa</strong> onde você vai colocando o que quer mandar. <code>git add</code> põe na caixa, <code>git commit</code> fecha e etiqueta a caixa. Enquanto não fechou, dá pra tirar coisa de dentro.</p></div>
+  <p>Um detalhe importante e não óbvio: <strong>o <code>add</code> captura o arquivo como ele está naquele instante</strong>. Se você faz <code>git add arquivo.txt</code>, edita o arquivo de novo e commita, o commit leva a versão do <code>add</code> — não a mais recente. O <code>git status</code> avisa disso mostrando o mesmo arquivo nas duas listas. Acontece com frequência quando se trabalha rápido.</p>
+
+  <h2 id="status">4. <code>git status</code>: o comando mais usado</h2>
+  <p>Rode agora:</p>
+  <pre><code>git status</code></pre>
+  <pre><code>On branch main
+
+No commits yet
+
+Untracked files:
+  (use "git add &lt;file&gt;..." to include in what will be committed)
+	README.md
+	index.html
+
+nothing added to commit but untracked files present (use "git add" to track)</code></pre>
+  <p>Vale ler linha por linha, porque essa saída vai te acompanhar todo dia:</p>
+  <table>
+    <thead>
+      <tr><th>Linha</th><th>O que diz</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>On branch main</code></td><td>Você está na branch <code>main</code> — resultado do <code>init.defaultBranch</code> configurado na aula 1</td></tr>
+      <tr><td><code>No commits yet</code></td><td>O repositório existe, mas o histórico está vazio</td></tr>
+      <tr><td><code>Untracked files</code></td><td>Arquivos que o Git <strong>enxerga mas não versiona</strong>. Ele não assume nada: arquivo novo só entra no histórico se você pedir</td></tr>
+      <tr><td>A linha entre parênteses</td><td>O Git sugerindo o próximo comando. Ele faz isso o tempo todo — é a documentação mais útil que existe</td></tr>
+    </tbody>
+  </table>
+  <p>"Rastreado" (<em>tracked</em>) é vocabulário que volta sempre: arquivo rastreado é aquele que o Git já conhece, porque entrou em algum commit ou está no staging. O resto é <em>untracked</em>.</p>
+  <div class="callout"><p><strong>Hábito:</strong> rodar <code>git status</code> antes e depois de qualquer coisa. É rápido, é local, não altera nada e responde "onde eu estou e o que está pendente". Quem usa Git bem roda esse comando dezenas de vezes por dia.</p></div>
+
+  <h2 id="add">5. <code>git add</code>: preparando o commit</h2>
+  <p>Coloque os dois arquivos no staging:</p>
+  <pre><code>git add index.html README.md</code></pre>
+  <p>Nenhuma saída — no Git, silêncio quase sempre significa sucesso. Confira o efeito:</p>
+  <pre><code>git status</code></pre>
+  <pre><code>On branch main
+
+No commits yet
+
+Changes to be committed:
+  (use "git rm --cached &lt;file&gt;..." to unstage)
+	new file:   README.md
+	new file:   index.html</code></pre>
+  <p>Os arquivos saíram de "untracked" e viraram <strong>"Changes to be committed"</strong> — estão na caixa, esperando o commit.</p>
+
+  <h3>5.1 As formas de usar o <code>add</code></h3>
+  <table>
+    <thead>
+      <tr><th>Comando</th><th>O que adiciona</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>git add arquivo.txt</code></td><td>Um arquivo específico</td></tr>
+      <tr><td><code>git add pasta/</code></td><td>Tudo dentro de uma pasta</td></tr>
+      <tr><td><code>git add *.html</code></td><td>Todos os arquivos que casam com o padrão</td></tr>
+      <tr><td><code>git add .</code></td><td>Tudo que mudou a partir da pasta atual</td></tr>
+      <tr><td><code>git add -A</code></td><td>Tudo que mudou no repositório inteiro, esteja você em que pasta estiver</td></tr>
+    </tbody>
+  </table>
+  <div class="warn"><p><strong>Cuidado com <code>git add .</code></strong> — é o comando mais usado e a origem mais comum de acidente: ele arrasta junto arquivos que você não pretendia versionar (arquivo temporário, credencial, pasta de dependências gigante). Não é proibido usar, mas o hábito seguro é <strong>rodar <code>git status</code> antes</strong> e conferir a lista. A seção 10 resolve boa parte disso de forma permanente com o <code>.gitignore</code>.</p></div>
+
+  <h2 id="commit">6. <code>git commit</code>: o primeiro ponto salvo</h2>
+  <pre><code>git commit -m "Cria estrutura inicial do guia de cafes"</code></pre>
+  <pre><code>[main (root-commit) 3f8a1c2] Cria estrutura inicial do guia de cafes
+ 2 files changed, 12 insertions(+)
+ create mode 100644 README.md
+ create mode 100644 index.html</code></pre>
+  <p>Lendo a saída:</p>
+  <ul>
+    <li><code>main</code> — branch onde o commit entrou.</li>
+    <li><code>root-commit</code> — marca que aparece só no primeiro commit do repositório: é o único sem commit pai (aula 1, seção 6.2).</li>
+    <li><code>3f8a1c2</code> — os 7 primeiros caracteres do hash. O seu vai ser diferente do exemplo, sempre. O Git mostra a forma curta porque ela já basta pra identificar o commit.</li>
+    <li>O resumo de arquivos e linhas.</li>
+  </ul>
+  <p>A flag <code>-m</code> passa a mensagem direto. Sem ela, o Git abre o editor configurado na aula 1 — útil pra mensagem longa, tratada na seção 9.</p>
+  <p>Confira o estado agora:</p>
+  <pre><code>git status</code></pre>
+  <pre><code>On branch main
+nothing to commit, working tree clean</code></pre>
+  <p><strong><code>working tree clean</code></strong> é o estado que você quer ver antes de trocar de branch, atualizar o projeto ou parar de trabalhar: significa que não há nada pendente — tudo que está na pasta já está gravado no histórico.</p>
+
+  <h2 id="ciclo">7. O ciclo completo, de novo</h2>
+  <p>Um commit não ensina o ciclo. Faça mais dois, com uma mudança de verdade em cada.</p>
+
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.html</span> — dentro do <code>&lt;ul&gt;</code>, adicione duas linhas depois do Espresso:</p>
+  </div>
+  <pre><code>  &lt;ul&gt;
+    &lt;li&gt;Espresso&lt;/li&gt;
+<span class="ln-add">    &lt;li&gt;Coado&lt;/li&gt;</span>
+<span class="ln-add">    &lt;li&gt;Prensa francesa&lt;/li&gt;</span>
+  &lt;/ul&gt;</code></pre>
+
+  <p>Veja como o Git descreve isso:</p>
+  <pre><code>git status</code></pre>
+  <pre><code>On branch main
+Changes not staged for commit:
+  (use "git add &lt;file&gt;..." to update what will be committed)
+  (use "git restore &lt;file&gt;..." to discard changes in working directory)
+	modified:   index.html
+
+no changes added to commit (use "git add" and/or "git commit -a")</code></pre>
+  <p>Repare na diferença: o arquivo aparece como <strong><code>modified</code></strong>, não <code>new file</code>, e a seção agora é <strong>"Changes not staged for commit"</strong> — mudou no working directory, mas ainda não foi pro staging. São as três seções possíveis do <code>status</code>:</p>
+  <table>
+    <thead>
+      <tr><th>Seção do <code>status</code></th><th>Significa</th><th>Onde está</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Untracked files</td><td>Git não versiona esse arquivo</td><td>Só no working directory</td></tr>
+      <tr><td>Changes not staged for commit</td><td>Arquivo rastreado, alterado, fora da caixa</td><td>Working directory</td></tr>
+      <tr><td>Changes to be committed</td><td>Vai entrar no próximo commit</td><td>Staging</td></tr>
+    </tbody>
+  </table>
+  <p>Complete o ciclo:</p>
+  <pre><code>git add index.html
+git commit -m "Adiciona coado e prensa francesa na lista"</code></pre>
+
+  <p>Agora o terceiro commit, num arquivo diferente:</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">README.md</span> — acrescente uma linha no fim:</p>
+  </div>
+  <pre><code># Guia de Cafés
+
+Lista de métodos e tipos de café.
+<span class="ln-add">
+Projeto usado para estudar Git.</span></code></pre>
+  <pre><code>git add README.md
+git commit -m "Explica o proposito do projeto no README"</code></pre>
+
+  <div class="callout"><p><strong>Atalho que você vai ver por aí:</strong> <code>git commit -am "mensagem"</code> faz <code>add</code> e <code>commit</code> num passo só. A pegadinha: ele só pega <strong>arquivos já rastreados</strong> — arquivo novo continua sendo ignorado, e a pessoa jura que commitou. Além disso, ele pula justamente a etapa de escolher o que entra, que é o motivo do staging existir. Conheça, mas não faça dele o padrão.</p></div>
+
+  <h2 id="log">8. <code>git log</code>: lendo o histórico</h2>
+  <pre><code>git log</code></pre>
+  <pre><code>commit 9c4d7e15a2b8f3c6d9e0a1b2c3d4e5f6a7b8c9d0 (HEAD -&gt; main)
+Author: Seu Nome &lt;seu@email.com&gt;
+Date:   Thu Aug 28 14:32:10 2025 -0300
+
+    Explica o proposito do projeto no README
+
+commit 5b3a9f2c8d1e4a7b0c3d6e9f2a5b8c1d4e7f0a3b
+Author: Seu Nome &lt;seu@email.com&gt;
+Date:   Thu Aug 28 14:28:44 2025 -0300
+
+    Adiciona coado e prensa francesa na lista
+
+commit 3f8a1c2b5d8e1f4a7c0d3e6f9a2b5c8d1e4f7a0b
+Author: Seu Nome &lt;seu@email.com&gt;
+Date:   Thu Aug 28 14:21:03 2025 -0300
+
+    Cria estrutura inicial do guia de cafes</code></pre>
+  <p>Está tudo aqui: o hash completo de 40 caracteres, o autor vindo do <code>git config</code> da aula 1, a data e a mensagem. Do <strong>mais recente para o mais antigo</strong>, de cima pra baixo.</p>
+  <p>Repare no <code>(HEAD -&gt; main)</code> no primeiro. Traduzindo: a branch <code>main</code> está apontando pro commit mais novo, e <code>HEAD</code> — que significa "onde eu estou agora" — está em <code>main</code>. Esse par volta com força na aula 4.</p>
+  <p>Se o histórico for longo, o Git abre a saída num paginador: navegue com as setas e saia com <code>q</code>.</p>
+
+  <h3>8.1 A forma que se usa no dia a dia</h3>
+  <pre><code>git log --oneline</code></pre>
+  <pre><code>9c4d7e1 (HEAD -&gt; main) Explica o proposito do projeto no README
+5b3a9f2 Adiciona coado e prensa francesa na lista
+3f8a1c2 Cria estrutura inicial do guia de cafes</code></pre>
+  <p>Um commit por linha, hash curto e mensagem. É assim que se lê histórico na prática — e é aqui que fica evidente por que mensagem ruim custa caro: essa lista é o que outra pessoa (ou você em três meses) vai usar pra achar alguma coisa.</p>
+  <p>Duas variações úteis agora, sem entrar nos filtros da aula 3:</p>
+  <pre><code>git log --oneline -3          # só os 3 últimos
+git log --oneline --graph     # desenha o grafo (fica interessante com branches, aula 4)</code></pre>
+
+  <h2 id="mensagens">9. Mensagem de commit que presta</h2>
+  <p>Da aula 1: a mensagem é a única parte do commit que o Git não consegue deduzir sozinho. Ela é o <em>porquê</em>, e é o que o mercado avalia quando lê seu histórico num code review.</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Mensagens ruins</h4>
+      <pre><code>ajustes
+correções
+wip
+teste
+alterado index.html
+asdf</code></pre>
+    </div>
+    <div class="good">
+      <h4>Mensagens boas</h4>
+      <pre><code>Adiciona coado e prensa francesa na lista
+Corrige acento no titulo da pagina
+Remove metodo duplicado do guia
+Explica o proposito do projeto no README</code></pre>
+    </div>
+  </div>
+  <p>O que separa as duas colunas:</p>
+  <ul>
+    <li><strong>Diz o que a mudança faz, não o arquivo que foi tocado.</strong> "alterado index.html" o <code>git log</code> já sabe sozinho; o que ele não sabe é <em>por quê</em>.</li>
+    <li><strong>Verbo no início, no imperativo</strong> ("Adiciona", "Corrige", "Remove"). É a convenção do próprio Git e da maioria dos projetos — a mensagem completa a frase "este commit ___".</li>
+    <li><strong>Primeira linha curta</strong>, até uns 50 caracteres. É ela que aparece no <code>--oneline</code> e na interface do GitHub.</li>
+    <li><strong>Sem ponto final</strong> na primeira linha. Convenção, não regra.</li>
+  </ul>
+  <p>Quando a explicação não cabe numa linha, use corpo: rode <code>git commit</code> sem <code>-m</code>, escreva o título, <strong>deixe uma linha em branco</strong> e escreva o resto. A linha em branco é obrigatória — é ela que o Git usa pra separar título de corpo.</p>
+  <pre><code>Remove prensa francesa da lista principal
+
+O metodo exige moagem grossa e a pagina ainda nao explica
+moagem. Volta quando a secao de moagem existir.</code></pre>
+  <div class="callout"><p><strong>Existe convenção com nome pra isso.</strong> Muitos times exigem o padrão <em>Conventional Commits</em> (<code>feat:</code>, <code>fix:</code>, <code>docs:</code>...), que torna a mensagem legível por máquina. Fica pra aula 7, junto com o resto das convenções de time — por enquanto, escrever mensagem clara em português já resolve.</p></div>
+
+  <h2 id="gitignore">10. <code>.gitignore</code>: o que não versionar</h2>
+  <p>Nem tudo que aparece na pasta do projeto deve entrar no histórico. Três categorias, sempre as mesmas:</p>
+  <table>
+    <thead>
+      <tr><th>Categoria</th><th>Exemplos</th><th>Por quê</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Segredo</td><td><code>.env</code>, chave de API, certificado, senha</td><td>Vira público quando o repositório vai pro GitHub, e continua no histórico depois de apagado (aula 9)</td></tr>
+      <tr><td>Gerado ou baixado</td><td><code>node_modules/</code>, <code>dist/</code>, <code>build/</code>, <code>*.log</code></td><td>Reproduzível a partir do código. Versionar incha o repositório e gera conflito sem sentido</td></tr>
+      <tr><td>Local, da sua máquina</td><td><code>.DS_Store</code>, <code>.vscode/</code>, anotações pessoais</td><td>Não diz respeito ao projeto nem ao resto do time</td></tr>
+    </tbody>
+  </table>
+  <p>O jeito de excluir isso é um arquivo chamado <code>.gitignore</code>, versionado junto com o projeto — assim a regra vale pra todo mundo que clonar.</p>
+
+  <div class="edit-step">
+    <p><span class="action action-new">Criar</span> <span class="file">.gitignore</span> — arquivo novo, na raiz do projeto:</p>
+  </div>
+  <pre><code># Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Segredos
+.env
+
+# Logs
+*.log</code></pre>
+
+  <p>Sintaxe, que é curta:</p>
+  <table>
+    <thead>
+      <tr><th>Padrão</th><th>Efeito</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code># comentário</code></td><td>Linha ignorada pelo próprio arquivo</td></tr>
+      <tr><td><code>arquivo.txt</code></td><td>Ignora esse arquivo, em qualquer pasta do projeto</td></tr>
+      <tr><td><code>*.log</code></td><td>Ignora por extensão ou padrão</td></tr>
+      <tr><td><code>pasta/</code></td><td>A barra no fim indica pasta: ignora ela e todo o conteúdo</td></tr>
+      <tr><td><code>/arquivo.txt</code></td><td>A barra no início prende na raiz: ignora só o da raiz, não os de subpastas</td></tr>
+      <tr><td><code>!importante.log</code></td><td>A exclamação abre exceção a uma regra anterior</td></tr>
+    </tbody>
+  </table>
+  <p>Commite o <code>.gitignore</code> — ele faz parte do projeto:</p>
+  <pre><code>git add .gitignore
+git commit -m "Adiciona gitignore com arquivos locais e segredos"</code></pre>
+  <div class="callout"><p><strong>Não escreva do zero em projeto real.</strong> Existe uma coleção oficial de <code>.gitignore</code> por linguagem em <a href="https://github.com/github/gitignore">github.com/github/gitignore</a>, e o GitHub oferece o arquivo pronto na hora de criar o repositório (aula 6). Para um projeto Node, por exemplo, o arquivo pronto já cobre <code>node_modules/</code> e uma dúzia de casos que ninguém lembra sozinho.</p></div>
+
+  <h2 id="ja-rastreado">11. Quando o <code>.gitignore</code> "não funciona"</h2>
+  <p>Este é um dos tropeços mais comuns do Git, e é melhor viver ele agora, de propósito, num projeto de estudo — do que na primeira semana de trabalho.</p>
+
+  <h3>11.1 Provocando o problema</h3>
+  <p>Crie um arquivo de anotações pessoais e commite <em>por descuido</em>, com o <code>git add .</code> que a seção 5 avisou:</p>
+  <pre><code>echo "senha do wifi da cafeteria: 12345678" &gt; notas-pessoais.txt
+git add .
+git commit -m "Atualiza guia"</code></pre>
+  <p>Pronto: um arquivo que não devia estar no histórico, está. Você percebe e faz o movimento intuitivo — acrescenta no <code>.gitignore</code>:</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">.gitignore</span> — acrescente no fim:</p>
+  </div>
+  <pre><code># Logs
+*.log
+<span class="ln-add">
+# Anotações locais
+notas-pessoais.txt</span></code></pre>
+  <p>Agora edite o arquivo pra ver se o Git ignora mesmo:</p>
+  <pre><code>echo "outra anotacao" &gt;&gt; notas-pessoais.txt
+git status</code></pre>
+  <pre><code>On branch main
+Changes not staged for commit:
+	modified:   notas-pessoais.txt</code></pre>
+  <p>O Git continua acompanhando o arquivo, mesmo com ele listado no <code>.gitignore</code>.</p>
+
+  <h3>11.2 Por que acontece</h3>
+  <div class="rule">
+    <span class="tag">A regra</span>
+    <p>O <code>.gitignore</code> só decide sobre arquivos <strong>untracked</strong>. Ele quer dizer "não comece a rastrear isto", e <strong>não</strong> "pare de rastrear isto". Assim que um arquivo entra num commit, ele passa a ser rastreado, e o <code>.gitignore</code> deixa de ter qualquer efeito sobre ele.</p>
+  </div>
+  <p>Faz sentido quando se pensa no contrário: se o <code>.gitignore</code> pudesse remover arquivos já versionados, adicionar uma linha nele apagaria arquivos do projeto de todo mundo no próximo <code>pull</code>.</p>
+
+  <h3>11.3 A solução</h3>
+  <p>É preciso dizer ao Git, explicitamente, pra parar de rastrear:</p>
+  <pre><code>git rm --cached notas-pessoais.txt</code></pre>
+  <pre><code>rm 'notas-pessoais.txt'</code></pre>
+  <p>A flag <code>--cached</code> é a parte importante: ela remove o arquivo <strong>do rastreamento do Git</strong>, mas <strong>mantém ele na sua pasta</strong>. Sem a flag, <code>git rm</code> apagaria o arquivo do disco também.</p>
+  <p>Para uma pasta inteira, acrescente <code>-r</code> (recursivo): <code>git rm -r --cached node_modules/</code>.</p>
+  <pre><code>git status</code></pre>
+  <pre><code>On branch main
+Changes to be committed:
+	deleted:    notas-pessoais.txt</code></pre>
+  <p>Isso precisa de commit, como qualquer outra mudança:</p>
+  <pre><code>git commit -m "Para de versionar anotacoes pessoais"</code></pre>
+  <p>Confira que o arquivo continua no disco e agora é ignorado de verdade:</p>
+  <pre><code>ls
+git status</code></pre>
+  <pre><code>index.html  notas-pessoais.txt  README.md
+
+On branch main
+nothing to commit, working tree clean</code></pre>
+  <p>O arquivo está lá, e o Git não vê mais.</p>
+  <div class="warn">
+    <p><strong>Ponto de segurança, e ele é sério:</strong> o que você fez remove o arquivo dos commits <em>futuros</em>. O conteúdo <strong>continua no histórico</strong>, nos commits antigos — <code>git log</code> ainda alcança. Num projeto de estudo local, sem problema.</p>
+    <p>Se fosse uma credencial real num repositório já publicado, isso <strong>não seria suficiente</strong>: qualquer pessoa que clonou já tem a credencial em mãos, e apagá-la do histórico depois não muda esse fato. A resposta correta nesse caso é <strong>rotacionar a credencial</strong> — trocar a senha, revogar a chave, gerar outro token. A aula 9 trata desse cenário inteiro.</p>
+  </div>
+
+  <h2 id="erros-comuns">12. Erros comuns nesta fase</h2>
+  <ol>
+    <li><strong>"Commitei mas o arquivo novo não foi junto."</strong> Quase sempre é <code>git commit -am</code>: ele ignora arquivo untracked. Use <code>git add</code> antes.</li>
+    <li><strong>"Fiz <code>add</code>, editei de novo, e o commit foi com a versão velha."</strong> O <code>add</code> fotografa o arquivo no instante em que roda. Se editou depois, rode <code>add</code> de novo.</li>
+    <li><strong><code>git init</code> na pasta errada.</strong> Rodar na home por engano cria um repositório que engole tudo. Confira com <code>pwd</code> antes; se aconteceu, apague o <code>.git</code> criado por engano — e só ele.</li>
+    <li><strong>Um commit gigante no fim do dia.</strong> Funciona, mas joga fora o principal benefício do histórico: reverter ou entender um pedaço isolado depois.</li>
+    <li><strong>Ignorar a saída de erro e ir direto pro Google.</strong> Da aula 1: a mensagem do Git costuma trazer o comando exato da solução.</li>
+  </ol>
+
+  <h2 id="checklist">13. Checklist antes de seguir</h2>
+  <div class="checklist">
+    <ul>
+      <li>A pasta <code>~/projetos/guia-de-cafes</code> existe e tem uma subpasta <code>.git</code></li>
+      <li><code>git log --oneline</code> mostra pelo menos 5 commits, com mensagens legíveis</li>
+      <li><code>git status</code> mostra <code>working tree clean</code></li>
+      <li>Existe um <code>.gitignore</code> versionado, e <code>notas-pessoais.txt</code> está no disco sem aparecer no <code>status</code></li>
+      <li>Você sabe explicar por que o Git tem staging em vez de commitar direto</li>
+      <li>Você sabe dizer a diferença entre "Changes not staged for commit" e "Changes to be committed"</li>
+      <li>Você sabe por que o <code>.gitignore</code> não afeta arquivo já rastreado, e qual comando resolve</li>
+    </ul>
+  </div>
+
+  <h2 id="proximos-passos">14. O que vem a seguir</h2>
+  <p>Você já sabe criar histórico. Falta a outra metade: <strong>consultar</strong> e <strong>desfazer</strong>.</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Navegando o histórico e desfazendo</strong> — <code>log</code> com filtros, <code>show</code>, as três comparações do <code>diff</code>, e o conjunto de comandos do "quero voltar atrás": <code>restore</code>, <code>restore --staged</code>, <code>commit --amend</code>, <code>reset</code> nas três formas e <code>revert</code>. Com uma tabela de "quero desfazer X, use Y".</li>
+      <li><strong>Branches</strong> — trabalhar em paralelo, o que <code>HEAD</code> significa de verdade, merge.</li>
+      <li><strong>Conflitos de merge</strong> — provocar um de propósito e resolver.</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Antes de seguir, vale fazer mais dois ou três commits no <code>guia-de-cafes</code> por conta própria — acrescente métodos na lista, mexa no README. O ciclo <code>status</code> / <code>add</code> / <code>commit</code> precisa estar automático, porque a partir da aula 3 ele deixa de ser o assunto e passa a ser só o meio.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

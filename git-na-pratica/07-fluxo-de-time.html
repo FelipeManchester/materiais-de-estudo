@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fluxo de time: branch, Pull Request, code review</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="06-repositorio-remoto.html">&larr; 6. Repositório remoto: GitHub</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#por-que-nao-main">1. Por que ninguém commita na main</a></li>
+    <li><a href="#ciclo">2. O ciclo, de ponta a ponta</a></li>
+    <li><a href="#nome-branch">3. Nome de branch</a></li>
+    <li><a href="#conventional">4. Conventional Commits</a></li>
+    <li><a href="#abrindo-pr">5. Abrindo o Pull Request</a></li>
+    <li><a href="#bom-pr">6. O que faz um PR bom</a></li>
+    <li><a href="#revisor">7. Do outro lado: ser revisor</a></li>
+    <li><a href="#respondendo">8. Respondendo ao review</a></li>
+    <li><a href="#ci">9. O CI travando o merge</a></li>
+    <li><a href="#tres-merges">10. As três formas de merge</a></li>
+    <li><a href="#protection">11. Branch protection</a></li>
+    <li><a href="#depois">12. Depois do merge</a></li>
+    <li><a href="#modelos">13. Os modelos de fluxo com nome</a></li>
+    <li><a href="#erros-comuns">14. Erros comuns nesta fase</a></li>
+    <li><a href="#checklist">15. Checklist antes de seguir</a></li>
+    <li><a href="#proximos-passos">16. O que vem a seguir</a></li>
+  </ol>
+</nav>
+
+<main>
+  <div class="eyebrow">Material de estudo — Git na prática — Parte 7</div>
+  <h1>Fluxo de time: branch, Pull Request, code review</h1>
+  <p class="subtitle">Esta é a aula mais próxima do que você vai fazer no primeiro dia de trabalho. Comando novo de Git tem pouco aqui — a maior parte já apareceu nas aulas 4 e 6. O que muda é o <strong>processo em volta</strong>: quem pode mexer no quê, quem revisa, o que trava o merge e por quê. Vale um lembrete da aula 1: <strong>Pull Request não é Git</strong> — não existe <code>git pull-request</code>. É um recurso do GitHub construído em cima do Git, e por isso muda de nome entre plataformas.</p>
+
+  <h2 id="por-que-nao-main">1. Por que ninguém commita na main</h2>
+  <p>Nas aulas anteriores você commitou direto na <code>main</code> à vontade. Em time, isso não acontece — e não é burocracia.</p>
+  <p>A <code>main</code> de um projeto real costuma ser <strong>o que está em produção</strong>, ou o que vai pra produção no próximo deploy. Commitar direto nela significa:</p>
+  <ul>
+    <li><strong>Ninguém olhou seu código antes.</strong> O erro que outra pessoa acharia em trinta segundos vai pro ar.</li>
+    <li><strong>Nada garante que ainda funciona.</strong> Sem uma etapa entre você e a <code>main</code>, não há onde rodar teste automatizado antes.</li>
+    <li><strong>Trabalho pela metade quebra o de todo mundo.</strong> Quem puxar a <code>main</code> nos próximos minutos leva junto o seu meio-caminho.</li>
+    <li><strong>Não há registro da decisão.</strong> Some o "por que fizemos assim" que o PR guarda.</li>
+  </ul>
+  <p>O fluxo com branch e Pull Request cria um <strong>portão</strong>: todo código passa por um lugar onde dá pra olhar, discutir, testar e recusar antes de virar oficial. A aula 4 já tinha a mecânica; aqui ela ganha o processo.</p>
+  <div class="callout"><p><strong>Isso é imposto por ferramenta, não por confiança.</strong> Na seção 11 você vai configurar o GitHub pra <em>recusar</em> push direto na <code>main</code> — inclusive o seu, inclusive sendo dono do repositório. Times sérios não deixam essa regra na memória das pessoas.</p></div>
+
+  <h2 id="ciclo">2. O ciclo, de ponta a ponta</h2>
+  <p>É este o ciclo que se repete por tarefa, todo dia, em qualquer time que use GitHub:</p>
+  <div class="step">
+    <div class="step-number">1</div>
+    <h3>Atualize a main</h3>
+    <p><code>git switch main</code> e <code>git pull</code>. Partir de código velho é a causa número um de conflito.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">2</div>
+    <h3>Crie a branch da tarefa</h3>
+    <p><code>git switch -c feat/nome-da-tarefa</code>, com o nome na convenção do time (seção 3).</p>
+  </div>
+  <div class="step">
+    <div class="step-number">3</div>
+    <h3>Trabalhe em commits pequenos</h3>
+    <p>O ciclo das aulas 2 e 3, sem novidade.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">4</div>
+    <h3>Publique a branch</h3>
+    <p><code>git push -u origin feat/nome-da-tarefa</code>.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">5</div>
+    <h3>Abra o Pull Request</h3>
+    <p>No GitHub, descrevendo o que mudou e por quê.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">6</div>
+    <h3>Espere review e CI</h3>
+    <p>Alguém revisa; os testes automatizados rodam. Você responde, corrige, empurra mais commits.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">7</div>
+    <h3>Merge e limpeza</h3>
+    <p>Aprovado e verde, faz merge pelo botão do GitHub, apaga a branch e atualiza a <code>main</code> local.</p>
+  </div>
+  <p>Compare com o ciclo da aula 4, seção 12: os passos 1 a 3 são idênticos. O que entrou foi o portão — publicar, ser revisado, e só então integrar.</p>
+
+  <h2 id="nome-branch">3. Nome de branch</h2>
+  <p>Repositório de time tem dezenas de branches abertas ao mesmo tempo. Nome bom é o que permite saber, sem abrir, o que é aquilo e de quem é.</p>
+  <p>A convenção mais comum usa prefixo por tipo:</p>
+  <pre><code>feat/exportar-relatorio-csv
+fix/login-aceita-email-com-maiuscula
+docs/atualiza-instrucoes-de-setup
+refactor/extrai-servico-de-email
+chore/atualiza-dependencias</code></pre>
+  <p>Em empresa com Jira ou similar, é muito comum entrar o número do ticket, porque ele liga a branch à tarefa:</p>
+  <pre><code>feat/PROJ-1234-exportar-relatorio-csv
+PROJ-1234-exportar-relatorio</code></pre>
+  <p>Regras práticas que valem em qualquer convenção:</p>
+  <ul>
+    <li>Tudo minúsculo, palavras separadas por hífen. Sem espaço, sem acento.</li>
+    <li>Descritivo, mas curto. Você vai digitar esse nome várias vezes.</li>
+    <li>Uma tarefa por branch. Nome que precisa de "e" no meio é sinal de PR grande demais.</li>
+    <li>Evite <code>minha-branch</code>, <code>teste</code>, <code>felipe</code>, <code>correcoes</code>.</li>
+  </ul>
+  <div class="rule">
+    <span class="tag">Ao entrar num time</span>
+    <p>Não invente convenção. Rode <code>git branch -a</code> e <code>git log --oneline -30</code> e <strong>copie o que já está lá</strong>. Convenção é decisão coletiva; chegar impondo a sua é ruído.</p>
+  </div>
+
+  <h2 id="conventional">4. Conventional Commits</h2>
+  <p>Na aula 2 ficou pendente: existe uma convenção com nome pra mensagem de commit, e é a mais adotada do mercado.</p>
+  <pre><code>tipo(escopo opcional): descrição no imperativo</code></pre>
+  <pre><code>feat: adiciona exportacao de relatorio em CSV
+fix(login): aceita email com letra maiuscula
+docs: atualiza instrucoes de setup no README
+refactor(email): extrai envio para servico proprio
+test: cobre caso de matricula duplicada
+chore: atualiza dependencias</code></pre>
+  <table>
+    <thead>
+      <tr><th>Tipo</th><th>Quando usar</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>feat</code></td><td>Funcionalidade nova</td></tr>
+      <tr><td><code>fix</code></td><td>Correção de bug</td></tr>
+      <tr><td><code>docs</code></td><td>Só documentação</td></tr>
+      <tr><td><code>refactor</code></td><td>Muda o código sem mudar o comportamento</td></tr>
+      <tr><td><code>perf</code></td><td>Melhora de performance</td></tr>
+      <tr><td><code>test</code></td><td>Adiciona ou corrige teste</td></tr>
+      <tr><td><code>build</code></td><td>Build, empacotamento, dependências</td></tr>
+      <tr><td><code>ci</code></td><td>Configuração de pipeline</td></tr>
+      <tr><td><code>chore</code></td><td>Manutenção que não se encaixa acima</td></tr>
+      <tr><td><code>style</code></td><td>Formatação sem efeito no código. Raro hoje — formatador resolve</td></tr>
+    </tbody>
+  </table>
+  <p>Mudança que quebra compatibilidade leva <code>!</code> ou um rodapé:</p>
+  <pre><code>feat!: remove endpoint /v1/usuarios
+
+BREAKING CHANGE: clientes devem migrar para /v2/usuarios</code></pre>
+
+  <h3>4.1 Por que existe</h3>
+  <p>Não é estética: a mensagem vira <strong>legível por máquina</strong>. Com isso, ferramentas geram changelog sozinhas e decidem a próxima versão automaticamente — <code>fix</code> sobe o número de correção, <code>feat</code> sobe o de funcionalidade, <code>!</code> sobe o principal.</p>
+  <div class="warn"><p><strong>Sendo honesto sobre a adoção:</strong> é padrão de fato no ecossistema JavaScript e em bibliotecas open source, mas <strong>não é universal</strong>. Kernel do Linux, Google e muitos times de produto usam outra coisa — com frequência o número do ticket como prefixo. E onde o time usa <em>squash</em> (seção 10), os commits da branch viram um só e a convenção passa a valer no <strong>título do PR</strong>, não em cada commit. Se o time não automatiza nada com isso, o padrão vira só disciplina de leitura — o que já é bom, mas não é o motivo principal dele existir.</p></div>
+
+  <h2 id="abrindo-pr">5. Abrindo o Pull Request</h2>
+  <p>Vamos fazer um de verdade, usando as duas pastas da aula 6.</p>
+  <pre><code>cd ~/projetos/guia-de-cafes
+git switch main
+git pull
+git switch -c feat/secao-de-moagem</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.html</span> — depois do <code>&lt;/ul&gt;</code>, acrescente a seção nova:</p>
+  </div>
+  <pre><code>  &lt;/ul&gt;
+<span class="ln-add">  &lt;h2&gt;Moagem&lt;/h2&gt;</span>
+<span class="ln-add">  &lt;p&gt;Cada método pede uma moagem diferente: fina para espresso,</span>
+<span class="ln-add">  média para coado, grossa para prensa francesa.&lt;/p&gt;</span>
+  &lt;footer&gt;</code></pre>
+  <pre><code>git commit -am "feat: adiciona secao de moagem na pagina"
+git push -u origin feat/secao-de-moagem</code></pre>
+  <p>Repare no fim da saída do push:</p>
+  <pre><code>remote: Create a pull request for 'feat/secao-de-moagem' on GitHub by visiting:
+remote:      https://github.com/seuusuario/guia-de-cafes/pull/new/feat/secao-de-moagem</code></pre>
+  <p>O GitHub já oferece o link. Abra, ou vá pelo site — ele mostra um banner "Compare &amp; pull request" por alguns dias após o push.</p>
+
+  <h3>5.1 Preenchendo</h3>
+  <p>Na tela do PR, confira antes de tudo a linha do topo: <strong><code>base: main</code> &larr; <code>compare: feat/secao-de-moagem</code></strong>. É a direção do merge — trazer a sua branch <em>para</em> a <code>main</code>. Errar isso acontece, principalmente quando o time tem outras branches longas.</p>
+  <p>Depois, título e descrição. Uma descrição que presta responde três perguntas:</p>
+  <pre><code>## O que muda
+Adiciona uma seção explicando qual moagem cada método pede.
+
+## Por quê
+A lista de métodos não dizia nada sobre preparo, e moagem é a
+dúvida mais comum de quem está começando.
+
+## Como testar
+Abrir o index.html no navegador; a seção aparece depois da lista
+e antes do rodapé.</code></pre>
+  <p>Duas coisas úteis na mesma tela:</p>
+  <ul>
+    <li><strong>Draft pull request</strong> — abre o PR marcado como rascunho. Serve pra mostrar trabalho em andamento e rodar o CI sem pedir review ainda. O botão de merge fica bloqueado até você marcar como pronto.</li>
+    <li><strong>Ligar a uma issue</strong> — escrever <code>Closes #12</code> na descrição faz o GitHub fechar a issue 12 automaticamente quando o PR for mergeado.</li>
+  </ul>
+  <p>Criado o PR, explore as abas: <strong>Conversation</strong> (discussão), <strong>Commits</strong> (os commits da branch) e <strong>Files changed</strong> (o diff completo — aquele mesmo formato da aula 3, seção 3.1).</p>
+
+  <h2 id="bom-pr">6. O que faz um PR bom</h2>
+  <p>Uma variável domina todas as outras:</p>
+  <div class="rule">
+    <span class="tag">Tamanho</span>
+    <p><strong>PR pequeno é revisado. PR grande é aprovado sem ser lido.</strong></p>
+    <p>Um PR de 50 linhas recebe comentários específicos e úteis. Um de 2000 recebe "LGTM" de alguém que rolou até o fim. O segundo dá a <em>impressão</em> de ter passado por revisão, o que é pior do que não ter revisão nenhuma.</p>
+  </div>
+  <p>O resto decorre disso:</p>
+  <table>
+    <thead>
+      <tr><th>Prática</th><th>Por quê</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Um assunto por PR</td><td>Misturar correção com refatoração impede aprovar uma e recusar a outra</td></tr>
+      <tr><td>Título que descreve o efeito</td><td>É o que aparece na lista de PRs e, com squash, vira a mensagem do commit</td></tr>
+      <tr><td>Descrição com o "por quê"</td><td>O diff mostra o que mudou; só você sabe o motivo</td></tr>
+      <tr><td>Revisar o próprio diff antes de pedir review</td><td>Metade dos comentários que você receberia, você mesmo acha na aba "Files changed"</td></tr>
+      <tr><td>Não deixar aberto por semanas</td><td>Quanto mais tempo, mais a <code>main</code> anda e mais conflito acumula (aula 5)</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="revisor">7. Do outro lado: ser revisor</h2>
+  <p>Metade do tempo gasto com PR num time é revisando o de outra pessoa. É trabalho, conta como trabalho, e costuma ser o que forma opinião sobre você mais rápido do que o próprio código.</p>
+
+  <h3>7.1 O que o GitHub oferece</h3>
+  <p>Na aba <strong>Files changed</strong>, clicando no <code>+</code> ao lado de uma linha, você comenta <em>naquela linha</em>. Ao terminar, o botão <strong>Review changes</strong> pede um veredito:</p>
+  <table>
+    <thead>
+      <tr><th>Veredito</th><th>Significa</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>Comment</strong></td><td>Observações, sem aprovar nem barrar</td></tr>
+      <tr><td><strong>Approve</strong></td><td>Pode ir. Em repositório protegido, é isso que libera o merge</td></tr>
+      <tr><td><strong>Request changes</strong></td><td>Tem coisa que precisa mudar antes. Bloqueia o merge até você revisar de novo</td></tr>
+    </tbody>
+  </table>
+  <p>Há ainda o <strong>suggestion</strong>: um comentário com bloco de sugestão que o autor aplica com um clique, virando commit. Ótimo pra correção pequena — melhor que três parágrafos descrevendo uma vírgula.</p>
+  <div class="callout"><p><strong>No seu repositório de estudo</strong>, dá pra abrir o PR, ver o diff e comentar em linha normalmente. O que o GitHub <strong>não</strong> deixa é aprovar o próprio PR — Approve exige outra conta. Em time real é justamente esse o ponto; aqui, basta saber que o botão existe e o que ele libera.</p></div>
+
+  <h3>7.2 O que procurar</h3>
+  <p>Em ordem de importância — e sim, nessa ordem:</p>
+  <ol>
+    <li><strong>Faz o que diz que faz?</strong> O código resolve o problema descrito.</li>
+    <li><strong>Casos que faltaram.</strong> Lista vazia, valor nulo, usuário sem permissão, dois cliques rápidos.</li>
+    <li><strong>Segurança e dados.</strong> Entrada não validada, credencial no código, log com dado pessoal.</li>
+    <li><strong>Legibilidade.</strong> Alguém entende isso em seis meses?</li>
+    <li><strong>Estilo.</strong> Por último, e só o que a ferramenta automática não pega.</li>
+  </ol>
+
+  <h3>7.3 Como comentar</h3>
+  <p>Review é conversa entre colegas sobre código, não avaliação de pessoa. Duas coisas mudam muito o tom:</p>
+  <div class="example">
+    <div class="bad">
+      <h4>Evite</h4>
+      <pre><code>Isso está errado.
+Por que você fez assim?
+Ninguém escreve mais desse jeito.</code></pre>
+    </div>
+    <div class="good">
+      <h4>Prefira</h4>
+      <pre><code>Se a lista vier vazia, isso quebra na linha 12.
+Dá pra usar X aqui? Fica mais simples de ler.
+Nit: nome no plural deixa mais claro que é coleção.</code></pre>
+    </div>
+  </div>
+  <p><strong>Fale do código, não de quem escreveu</strong> ("essa função quebra se...", não "você esqueceu de..."), e <strong>separe o obrigatório do opinativo</strong>. A convenção mais usada pra isso é o prefixo <code>nit:</code> (de <em>nitpick</em>), que significa "detalhe pequeno, pode ignorar". Sem essa marcação, o autor não sabe o que precisa mudar pra destravar o merge.</p>
+
+  <h2 id="respondendo">8. Respondendo ao review</h2>
+  <p>Chegaram comentários. O fluxo é simples: você corrige na mesma branch e empurra mais commits.</p>
+  <pre><code>git switch feat/secao-de-moagem
+# ... corrige ...
+git commit -am "fix: corrige exemplo de moagem para prensa"
+git push</code></pre>
+  <p><strong>O PR se atualiza sozinho.</strong> Não se abre PR novo pra cada correção: enquanto a branch é a mesma, os commits entram no PR existente, e o revisor consegue ver só o que mudou desde a última revisão.</p>
+  <p>Sobre as conversas: cada comentário vira um fio que pode ser marcado como <em>Resolved</em>. Convenção comum e sensata — <strong>quem abriu o comentário é quem resolve</strong>, depois de conferir a correção. Autor resolvendo os próprios encerra a conversa antes do revisor concordar.</p>
+  <p>E responder "não vou mudar" é resposta legítima, desde que com motivo. Review é discussão técnica; se o revisor não sabia de um contexto, explicar resolve.</p>
+  <div class="callout"><p><strong>Não reescreva histórico com PR aberto.</strong> <code>commit --amend</code> ou <code>reset</code> numa branch já publicada trocam os hashes (aula 3), o revisor perde a referência dos comentários e o push é rejeitado. Faça commits normais de correção — se o time usar squash, eles somem no merge de qualquer forma.</p></div>
+
+  <h2 id="ci">9. O CI travando o merge</h2>
+  <p>Repositório de time costuma ter <strong>integração contínua</strong>: um serviço que roda automaticamente a cada push — testes, verificação de estilo, build. No GitHub isso é o GitHub Actions.</p>
+  <p>O resultado aparece no fim do PR, como uma lista de <em>checks</em>:</p>
+  <table>
+    <thead>
+      <tr><th>Estado</th><th>Significa</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><span class="badge badge-ok">verde</span></td><td>Passou. Merge liberado (se houver aprovação)</td></tr>
+      <tr><td><span class="badge badge-warn">amarelo</span></td><td>Rodando. Espere</td></tr>
+      <tr><td><span class="badge badge-err">vermelho</span></td><td>Falhou. Merge bloqueado</td></tr>
+    </tbody>
+  </table>
+  <p>Vermelho não se contorna: <strong>é o próprio PR dizendo que o código não está pronto.</strong> Clique em "Details" pra ver o log e descobrir qual teste quebrou. Corrija na branch, empurre, e o CI roda de novo sozinho.</p>
+  <p>Duas coisas que vale saber desde já:</p>
+  <ul>
+    <li><strong>CI que falha por motivo alheio existe</strong> — teste instável, serviço externo fora do ar. Nesses casos se re-roda o job. Mas "deve ser instabilidade" é a desculpa mais cara do desenvolvimento: confira antes de reexecutar.</li>
+    <li><strong>Rodar o teste localmente antes de abrir o PR</strong> é o que evita o ciclo lento de empurrar, esperar cinco minutos e descobrir um erro de digitação.</li>
+  </ul>
+  <p>Configurar o CI em si é assunto de outra trilha — aqui interessa o efeito: ele é parte do portão.</p>
+
+  <h2 id="tres-merges">10. As três formas de merge</h2>
+  <p>Com aprovação e CI verde, o botão libera. E ele tem três opções, que produzem históricos bem diferentes na <code>main</code>.</p>
+
+  <h3>10.1 Create a merge commit</h3>
+  <p>Traz todos os commits da branch e cria um merge commit por cima — o merge da aula 4, seção 9.</p>
+  <pre><code>*   Merge pull request #3 from usuario/feat/secao-de-moagem
+|\
+| * fix: corrige exemplo de moagem para prensa
+| * feat: adiciona secao de moagem na pagina
+|/
+* commit anterior da main</code></pre>
+  <p>Preserva tudo, inclusive os commits de correção do review. Histórico fiel e mais poluído.</p>
+
+  <h3>10.2 Squash and merge</h3>
+  <p>Junta todos os commits da branch em <strong>um só</strong>, aplicado na <code>main</code>:</p>
+  <pre><code>* feat: adiciona secao de moagem na pagina (#3)
+* commit anterior da main</code></pre>
+  <p>É a opção mais usada hoje em time de produto, e a lógica é: <strong>a unidade que importa no histórico da <code>main</code> é o PR, não cada passo do trabalho</strong>. Os "corrige typo", "responde review" e "wip" desaparecem.</p>
+  <p>Detalhe prático que fecha a seção 4: com squash, a mensagem do commit final vem do <strong>título do PR</strong>. É por isso que muitos times cobram Conventional Commits ali, e não em cada commit da branch.</p>
+
+  <h3>10.3 Rebase and merge</h3>
+  <p>Reaplica os commits da branch um a um no topo da <code>main</code>, sem merge commit:</p>
+  <pre><code>* fix: corrige exemplo de moagem para prensa
+* feat: adiciona secao de moagem na pagina
+* commit anterior da main</code></pre>
+  <p>Histórico linear preservando cada commit. Exige commits bem feitos na branch — o mecanismo do rebase é a aula 8.</p>
+
+  <h3>10.4 Comparando</h3>
+  <table>
+    <thead>
+      <tr><th>&nbsp;</th><th>Merge commit</th><th>Squash</th><th>Rebase</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Commits na main</td><td>Todos + o merge</td><td>Um só</td><td>Todos, sem merge</td></tr>
+      <tr><td>Histórico</td><td>Ramificado</td><td>Linear</td><td>Linear</td></tr>
+      <tr><td>Reverter o PR inteiro</td><td>Um comando</td><td>Um comando</td><td>Commit a commit</td></tr>
+      <tr><td>Preserva os passos do trabalho</td><td>Sim</td><td>Não</td><td>Sim</td></tr>
+      <tr><td>Bom quando</td><td>Se quer rastrear a ramificação</td><td>Commits da branch são bagunçados</td><td>Cada commit tem valor próprio</td></tr>
+    </tbody>
+  </table>
+  <p>Não existe escolha certa — é decisão do time, e normalmente já está configurada no repositório quando você chega. Faça o merge do seu PR agora com <strong>Squash and merge</strong>, que é o caso mais provável de encontrar por aí.</p>
+
+  <h2 id="protection">11. Branch protection</h2>
+  <p>Nada até aqui impede alguém de dar <code>git push</code> direto na <code>main</code> e pular o processo inteiro. É o GitHub que impede, se configurado.</p>
+  <p>No seu repositório: <em>Settings &rarr; Branches &rarr; Add branch protection rule</em> (nas contas mais novas, aparece como <em>Rules &rarr; Rulesets</em>). Aplique à <code>main</code> e marque:</p>
+  <table>
+    <thead>
+      <tr><th>Regra</th><th>Efeito</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Require a pull request before merging</td><td>Push direto na <code>main</code> é recusado. A regra central</td></tr>
+      <tr><td>Require approvals</td><td>Exige N aprovações no PR. Normalmente 1 ou 2</td></tr>
+      <tr><td>Require status checks to pass</td><td>CI vermelho bloqueia o merge de fato</td></tr>
+      <tr><td>Require branches to be up to date</td><td>Obriga atualizar com a <code>main</code> antes de mergear</td></tr>
+      <tr><td>Require linear history</td><td>Proíbe merge commit — força squash ou rebase</td></tr>
+      <tr><td>Do not allow bypassing</td><td>Vale também para administradores. Sem isso, quem tem permissão pula tudo</td></tr>
+    </tbody>
+  </table>
+  <p>Com isso ligado, tentar empurrar direto:</p>
+  <pre><code>git push</code></pre>
+  <pre><code>remote: error: GH006: Protected branch update failed for refs/heads/main.
+remote: error: Changes must be made through a pull request.</code></pre>
+  <p>Vale ligar no seu repositório de estudo pra ver o erro acontecer. Ele é comum no primeiro dia de trabalho, e reconhecer a mensagem evita achar que quebrou alguma coisa.</p>
+  <div class="callout"><p><strong>Force push também é bloqueado</strong> por essa configuração, o que é metade do motivo dela existir. É o que impede alguém de reescrever a história compartilhada — o assunto da aula 8.</p></div>
+
+  <h2 id="depois">12. Depois do merge</h2>
+  <p>O PR foi mergeado no GitHub. Sua máquina ainda não sabe:</p>
+  <pre><code>git switch main
+git pull
+git branch -d feat/secao-de-moagem
+git fetch --prune</code></pre>
+  <p>Os quatro passos: voltar pra <code>main</code>, trazer o que foi mergeado, apagar a branch local e limpar a referência à branch remota — que o GitHub já apagou, se você usou o botão "Delete branch" que ele oferece depois do merge.</p>
+  <div class="warn"><p><strong>Se o time usa squash</strong>, o <code>git branch -d</code> pode reclamar que a branch "não foi mergeada". Faz sentido: os commits originais dela não existem na <code>main</code> — o que existe é um commit novo com o conteúdo deles. Nesse caso, e <strong>só depois de confirmar que o PR foi mergeado no GitHub</strong>, use <code>git branch -D</code>.</p></div>
+  <p>Esse bloco de quatro comandos é o começo de toda tarefa nova. Vale virar reflexo.</p>
+
+  <h2 id="modelos">13. Os modelos de fluxo com nome</h2>
+  <p>O que você fez nesta aula tem nome, e vai ouvir esses nomes numa entrevista ou no primeiro dia. São três os que aparecem.</p>
+
+  <h3>13.1 GitHub Flow</h3>
+  <p>O mais simples e o mais comum. Uma branch permanente só — a <code>main</code>, sempre pronta pra ir pra produção. Toda tarefa vira branch curta, PR, review, merge, deploy.</p>
+  <pre><code>main ──┬──&gt; feat/x ──┐
+       │              ├──&gt; merge
+       └──&gt; fix/y ────┘</code></pre>
+  <p>É exatamente o ciclo da seção 2. Serve para a maioria dos produtos web, que fazem deploy a qualquer momento.</p>
+
+  <h3>13.2 GitFlow</h3>
+  <p>Bem mais estruturado, com <strong>duas branches permanentes</strong> — <code>main</code> (o que está em produção) e <code>develop</code> (o que vai na próxima versão) — mais três famílias temporárias: <code>feature/*</code>, <code>release/*</code> e <code>hotfix/*</code>.</p>
+  <pre><code>main    ──────●───────────────●──   (versões publicadas)
+               \             /
+release         ●───────────●
+               /
+develop ──●───●───●───●───●──
+           \     /     \   /
+feature     ●───●       ●─●</code></pre>
+  <p>Faz sentido em software com <strong>versões numeradas e lançamentos programados</strong> — desktop, mobile com ciclo de loja, produto que mantém várias versões ao mesmo tempo. Em produto web com deploy contínuo, costuma ser peso morto: o próprio autor publicou em 2020 uma nota dizendo que o modelo não foi pensado para esse cenário.</p>
+
+  <h3>13.3 Trunk-based development</h3>
+  <p>O oposto do GitFlow. Branches vivem <strong>horas</strong>, não dias — e às vezes se commita direto na <code>main</code>. Funcionalidade incompleta vai pra produção desligada por <em>feature flag</em>.</p>
+  <pre><code>main ──●──●──●──●──●──●──●──  (integração várias vezes ao dia)</code></pre>
+  <p>Exige CI forte, boa cobertura de teste e disciplina. Comum em times grandes e maduros, e é o modelo que a pesquisa sobre desempenho de times de engenharia costuma apontar como o de melhor resultado.</p>
+
+  <h3>13.4 Comparando</h3>
+  <table>
+    <thead>
+      <tr><th>&nbsp;</th><th>GitHub Flow</th><th>GitFlow</th><th>Trunk-based</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Branches permanentes</td><td><code>main</code></td><td><code>main</code> + <code>develop</code></td><td><code>main</code></td></tr>
+      <tr><td>Vida de uma branch</td><td>Dias</td><td>Semanas</td><td>Horas</td></tr>
+      <tr><td>Complexidade</td><td>Baixa</td><td>Alta</td><td>Baixa (no Git)</td></tr>
+      <tr><td>Exige</td><td>PR e review</td><td>Disciplina de processo</td><td>CI forte e feature flags</td></tr>
+      <tr><td>Bom para</td><td>Produto web, maioria dos times</td><td>Versões numeradas, releases programadas</td><td>Times grandes com automação madura</td></tr>
+    </tbody>
+  </table>
+  <p>Você não escolhe o modelo ao entrar num time — herda. O que importa é reconhecer qual é, e a pergunta que resolve isso no primeiro dia é direta: <strong>"qual é o fluxo de branch aqui?"</strong>. Ninguém estranha ela; estranha-se quem passa duas semanas errando o processo sem perguntar.</p>
+
+  <h2 id="erros-comuns">14. Erros comuns nesta fase</h2>
+  <ol>
+    <li><strong>PR gigante.</strong> O erro mais caro de todos: não recebe revisão de verdade. Quebre em PRs menores, mesmo que dê trabalho.</li>
+    <li><strong>Branch criada a partir de <code>main</code> desatualizada.</strong> Conflito garantido. Sempre <code>git pull</code> antes do <code>switch -c</code>.</li>
+    <li><strong>Abrir PR novo pra cada correção do review.</strong> Basta empurrar na mesma branch.</li>
+    <li><strong>Reescrever histórico com PR aberto.</strong> <code>amend</code>/<code>reset</code> quebram a referência dos comentários e o push.</li>
+    <li><strong>Merge com CI vermelho.</strong> Se o repositório permite, alguém vai tentar. É como o código quebrado chega na <code>main</code>.</li>
+    <li><strong>Aprovar sem ler.</strong> "LGTM" em PR de 1500 linhas é pior do que não revisar: cria a ilusão de que passou por revisão.</li>
+    <li><strong>Esquecer de atualizar a <code>main</code> local depois do merge.</strong> A próxima branch nasce velha, e o ciclo recomeça.</li>
+    <li><strong>Levar review pro pessoal.</strong> Dos dois lados. Comentário é sobre código.</li>
+  </ol>
+
+  <h2 id="checklist">15. Checklist antes de seguir</h2>
+  <div class="checklist">
+    <ul>
+      <li>Você abriu um Pull Request de verdade, com título e descrição decentes</li>
+      <li>Navegou pelas abas Conversation, Commits e Files changed</li>
+      <li>Comentou numa linha específica do diff</li>
+      <li>Empurrou um commit novo na branch e viu o PR se atualizar sozinho</li>
+      <li>Fez merge pelo botão do GitHub e limpou as branches local e remota</li>
+      <li>Sabe explicar a diferença entre merge commit, squash e rebase merge</li>
+      <li>Ligou branch protection e viu o push direto na <code>main</code> ser recusado</li>
+      <li>Sabe dizer, em uma frase, o que distingue GitHub Flow, GitFlow e trunk-based</li>
+      <li>Sabe o que perguntar no primeiro dia sobre o fluxo do time</li>
+    </ul>
+  </div>
+
+  <h2 id="proximos-passos">16. O que vem a seguir</h2>
+  <p>Você já consegue trabalhar num time sem quebrar nada. As duas últimas aulas cuidam de <strong>histórico limpo</strong> e <strong>rede de segurança</strong>.</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Rebase e histórico limpo</strong> — o mecanismo por trás do <code>pull --rebase</code> e do "Rebase and merge", <code>rebase -i</code> pra reorganizar commits antes do PR (squash, reword, drop, fixup), o conflito <em>durante</em> rebase — que se resolve diferente do da aula 5 —, a regra de ouro de não reescrever histórico compartilhado e o force push feito direito com <code>--force-with-lease</code>.</li>
+      <li><strong>Rede de segurança</strong> — <code>stash</code>, <code>reflog</code>, recuperar o que sumiu, <code>cherry-pick</code> e o caso do segredo commitado.</li>
+      <li><strong>Git no dia a dia</strong> — cenários reais de ponta a ponta e a colinha final.</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Vale repetir o ciclo desta aula duas ou três vezes antes de seguir, usando a pasta clonada como "outra pessoa": abra um PR de lá, revise pela interface, comente numa linha, corrija e mergeie. É o único jeito de o fluxo virar automático antes de ele valer dinheiro — e é literalmente o que você vai fazer todo dia.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

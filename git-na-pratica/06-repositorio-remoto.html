@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Repositório remoto: GitHub</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="05-conflitos-de-merge.html">&larr; 5. Conflitos de merge</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#o-que-muda">1. O que muda com um remoto</a></li>
+    <li><a href="#conta">2. Conta e repositório no GitHub</a></li>
+    <li><a href="#autenticacao">3. Autenticação: SSH ou HTTPS</a></li>
+    <li><a href="#remote-add">4. <code>git remote add</code></a></li>
+    <li><a href="#push">5. <code>git push -u</code>: o primeiro envio</a></li>
+    <li><a href="#tracking">6. Branch de rastreamento</a></li>
+    <li><a href="#clone">7. <code>git clone</code>: simulando um colega</a></li>
+    <li><a href="#fetch-pull">8. <code>fetch</code> e <code>pull</code></a></li>
+    <li><a href="#pull-rebase">9. <code>pull --rebase</code></a></li>
+    <li><a href="#rejeitado">10. Push rejeitado</a></li>
+    <li><a href="#branches-remotas">11. Branches no remoto</a></li>
+    <li><a href="#erros-comuns">12. Erros comuns nesta fase</a></li>
+    <li><a href="#checklist">13. Checklist antes de seguir</a></li>
+    <li><a href="#proximos-passos">14. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="07-fluxo-de-time.html">7. Fluxo de time: branch, Pull Request, code review &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Material de estudo — Git na prática — Parte 6</div>
+  <h1>Repositório remoto: GitHub</h1>
+  <p class="subtitle">Até agora tudo aconteceu dentro da sua máquina. Esta aula tira o projeto de lá. A ideia central vem da aula 1 e vale repetir antes de começar: <strong>o repositório no GitHub não é especial</strong> — é mais um clone, igual ao seu. Ele é a fonte de verdade porque as pessoas combinaram que é, não porque a ferramenta obriga. Todo o resto da aula fica mais simples com isso em mente.</p>
+
+  <h2 id="o-que-muda">1. O que muda com um remoto</h2>
+  <p>Um <strong>remote</strong> é um repositório em outro lugar, com o qual o seu troca commits. Ter um resolve três coisas de uma vez:</p>
+  <ul>
+    <li><strong>Backup.</strong> Sua máquina morre e o trabalho continua existindo.</li>
+    <li><strong>Colaboração.</strong> Outras pessoas conseguem pegar o seu trabalho e mandar o delas.</li>
+    <li><strong>Portfólio.</strong> Em vaga de programação, o link do GitHub costuma ser olhado antes do currículo.</li>
+  </ul>
+  <p>O que <strong>não</strong> muda: todo o ciclo das aulas 2 a 5 continua idêntico. <code>add</code>, <code>commit</code>, <code>branch</code>, <code>merge</code> seguem sendo locais e instantâneos. O remoto acrescenta dois verbos ao vocabulário — <strong>enviar</strong> (<code>push</code>) e <strong>trazer</strong> (<code>fetch</code>/<code>pull</code>) — e mais nada.</p>
+  <div class="callout"><p><strong>Git ≠ GitHub, de novo.</strong> Nada nesta aula é exclusivo do GitHub: os mesmos comandos funcionam com GitLab, Bitbucket ou um servidor da própria empresa. O que muda entre eles é o site, não o Git.</p></div>
+
+  <h2 id="conta">2. Conta e repositório no GitHub</h2>
+
+  <h3>2.1 A conta</h3>
+  <p>Se ainda não tem, crie em <a href="https://github.com/signup">github.com/signup</a>. Duas recomendações que economizam dor de cabeça:</p>
+  <ul>
+    <li><strong>Nome de usuário profissional.</strong> Ele vira parte da URL dos seus projetos e aparece em processo seletivo.</li>
+    <li><strong>Ative 2FA.</strong> Autenticação em dois fatores é obrigatória no GitHub para quem contribui com código, e uma conta comprometida significa código alheio comprometido junto.</li>
+  </ul>
+  <p>Momento de voltar ao pendente da aula 1: em <em>Settings &rarr; Emails</em>, marque <strong>"Keep my email addresses private"</strong> e copie o endereço <code>noreply</code> que aparece ali. Depois:</p>
+  <pre><code>git config --global user.email "12345678+seuusuario@users.noreply.github.com"</code></pre>
+  <p>Assim os commits daqui pra frente não expõem seu e-mail pessoal. Os commits antigos continuam com o endereço antigo — reescrever isso não vale o esforço num projeto de estudo.</p>
+
+  <h3>2.2 O repositório</h3>
+  <p>No GitHub, botão <strong>New repository</strong>. Preencha:</p>
+  <table>
+    <thead>
+      <tr><th>Campo</th><th>Valor</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Repository name</td><td><code>guia-de-cafes</code></td></tr>
+      <tr><td>Description</td><td>Opcional</td></tr>
+      <tr><td>Public / Private</td><td>Qualquer um serve. Público é bom pra portfólio</td></tr>
+      <tr><td>Add a README file</td><td><strong>NÃO marque</strong></td></tr>
+      <tr><td>Add .gitignore</td><td><strong>NÃO marque</strong></td></tr>
+      <tr><td>Choose a license</td><td><strong>NÃO marque</strong></td></tr>
+    </tbody>
+  </table>
+  <div class="warn">
+    <p><strong>Por que não marcar nada:</strong> essas opções fazem o GitHub criar um commit inicial no repositório remoto. Como o seu repositório local já tem commits próprios, você ficaria com <strong>duas histórias sem ancestral em comum</strong> — e o primeiro <code>pull</code> falharia com <code>fatal: refusing to merge unrelated histories</code>.</p>
+    <p>A regra: <strong>repositório local já existe? Crie o remoto vazio.</strong> As opções acima só fazem sentido quando o projeto começa no GitHub e você vai cloná-lo.</p>
+  </div>
+  <p>Depois de criar, o GitHub mostra uma tela com instruções e duas URLs. Guarde a página aberta.</p>
+
+  <h2 id="autenticacao">3. Autenticação: SSH ou HTTPS</h2>
+  <p>Antes de enviar qualquer coisa, o GitHub precisa saber que é você. <strong>Senha da conta não funciona</strong> — o GitHub removeu essa possibilidade em 2021, justamente porque senha reusada em várias ferramentas é um risco ruim de conter.</p>
+  <p>Restam dois caminhos:</p>
+  <table>
+    <thead>
+      <tr><th>&nbsp;</th><th>SSH</th><th>HTTPS + token</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>URL</td><td><code>git@github.com:usuario/repo.git</code></td><td><code>https://github.com/usuario/repo.git</code></td></tr>
+      <tr><td>Como funciona</td><td>Par de chaves criptográficas</td><td>Token que substitui a senha</td></tr>
+      <tr><td>Configuração</td><td>Uma vez por máquina</td><td>Uma vez, mas o token expira</td></tr>
+      <tr><td>Passa em rede corporativa restritiva</td><td>Às vezes bloqueada</td><td>Quase sempre passa</td></tr>
+      <tr><td>Recomendado para</td><td>Sua máquina de trabalho</td><td>Ambiente onde SSH é bloqueado</td></tr>
+    </tbody>
+  </table>
+  <p>A recomendação é <strong>SSH</strong>: configura uma vez e nunca mais pede nada.</p>
+
+  <h3>3.1 Configurando SSH</h3>
+  <p>Veja se já existe uma chave na máquina:</p>
+  <pre><code>ls -la ~/.ssh</code></pre>
+  <p>Procure por um par <code>id_ed25519</code> e <code>id_ed25519.pub</code>. Se não houver, gere:</p>
+  <pre><code>ssh-keygen -t ed25519 -C "seu@email.com"</code></pre>
+  <p>Ele faz três perguntas:</p>
+  <ul>
+    <li><strong>Local do arquivo</strong> — aceite o padrão, Enter.</li>
+    <li><strong>Passphrase</strong> — uma senha que protege a chave. Recomendada: se alguém copiar sua chave privada, ela sozinha não serve.</li>
+    <li><strong>Confirmação da passphrase.</strong></li>
+  </ul>
+  <p>Isso cria dois arquivos, e a diferença entre eles é o ponto inteiro:</p>
+  <table>
+    <thead>
+      <tr><th>Arquivo</th><th>O que é</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>id_ed25519</code></td><td><strong>Chave privada.</strong> Nunca sai da sua máquina, nunca é enviada a ninguém, nunca entra num repositório</td></tr>
+      <tr><td><code>id_ed25519.pub</code></td><td><strong>Chave pública.</strong> Essa sim vai pro GitHub. Pode ser vista por qualquer um sem problema</td></tr>
+    </tbody>
+  </table>
+  <div class="warn"><p><strong>A chave privada é uma credencial.</strong> Quem tiver o arquivo <code>id_ed25519</code> consegue agir como você em todo repositório onde a chave está autorizada. Não copie pra outra máquina por e-mail ou chat, não coloque em pasta sincronizada na nuvem, e não commite por acidente — se isso acontecer, gere um par novo e remova o antigo do GitHub imediatamente.</p></div>
+  <p>Copie o conteúdo da chave <strong>pública</strong>:</p>
+  <pre><code>cat ~/.ssh/id_ed25519.pub</code></pre>
+  <p>No GitHub: <em>Settings &rarr; SSH and GPG keys &rarr; New SSH key</em>. Título livre (o nome da máquina ajuda), cole o conteúdo, salve.</p>
+  <p>Teste:</p>
+  <pre><code>ssh -T git@github.com</code></pre>
+  <pre><code>Hi seuusuario! You've successfully authenticated, but GitHub does not provide shell access.</code></pre>
+  <p>Essa mensagem — inclusive a parte do "does not provide shell access" — é sucesso.</p>
+
+  <h3>3.2 A alternativa: HTTPS com token</h3>
+  <p>Se o SSH estiver bloqueado na sua rede, use token. Em <em>Settings &rarr; Developer settings &rarr; Personal access tokens</em>, gere um token com escopo <code>repo</code> e prazo de validade.</p>
+  <p>Ele aparece <strong>uma única vez</strong>. Ao dar <code>push</code>, o Git pede usuário e senha: informe seu usuário e <strong>cole o token no lugar da senha</strong>.</p>
+  <div class="warn"><p><strong>O token é equivalente à sua senha</strong> para efeitos de acesso a repositório. Trate como tal: não cole em chat, não coloque dentro de arquivo do projeto, não deixe em variável commitada. Prefira sempre o menor escopo e o menor prazo que resolvam o seu caso, e revogue quando não precisar mais.</p></div>
+  <p>Pra não digitar a cada push, configure um gerenciador de credenciais do sistema (no Linux, <code>libsecret</code>; no macOS, o Keychain; no Windows, o gerenciador que vem com o Git). Evite <code>credential.helper store</code>, que grava o token em texto puro num arquivo comum.</p>
+  <div class="callout"><p><strong>Atalho:</strong> o <a href="https://cli.github.com">GitHub CLI</a> resolve autenticação num comando — <code>gh auth login</code> — e configura tudo sozinho. Vale conhecer; ele volta na aula 10.</p></div>
+
+  <h2 id="remote-add">4. <code>git remote add</code></h2>
+  <p>Agora é ligar o repositório local ao remoto:</p>
+  <pre><code>cd ~/projetos/guia-de-cafes
+git remote add origin git@github.com:seuusuario/guia-de-cafes.git</code></pre>
+  <p>Decompondo: <code>remote add</code> registra um remoto novo, <code>origin</code> é o apelido que você dá a ele, e o resto é o endereço.</p>
+  <div class="rule">
+    <span class="tag">Sobre o nome "origin"</span>
+    <p><strong><code>origin</code> não é palavra reservada do Git</strong> — é só uma convenção, tão forte que todo mundo usa. É o apelido do remoto principal. Você poderia chamar de <code>github</code> ou <code>casa</code>; não faça isso sem motivo, porque todo material e todo colega vai assumir <code>origin</code>.</p>
+  </div>
+  <p>Confira:</p>
+  <pre><code>git remote -v</code></pre>
+  <pre><code>origin	git@github.com:seuusuario/guia-de-cafes.git (fetch)
+origin	git@github.com:seuusuario/guia-de-cafes.git (push)</code></pre>
+  <p>Duas linhas porque o Git permite endereços diferentes para buscar e para enviar. Na prática, são sempre iguais.</p>
+  <p>Comandos relacionados, pra quando precisar:</p>
+  <pre><code>git remote set-url origin nova-url    # troca o endereço (ex: migrar de HTTPS pra SSH)
+git remote remove origin              # desconecta
+git remote rename origin upstream     # renomeia</code></pre>
+
+  <h2 id="push">5. <code>git push -u</code>: o primeiro envio</h2>
+  <pre><code>git push -u origin main</code></pre>
+  <pre><code>Enumerating objects: 34, done.
+Counting objects: 100% (34/34), done.
+Writing objects: 100% (34/34), 3.21 KiB | 3.21 MiB/s, done.
+To github.com:seuusuario/guia-de-cafes.git
+ * [new branch]      main -&gt; main
+branch 'main' set up to track 'origin/main'.</code></pre>
+  <p>Atualize a página do GitHub: seus arquivos estão lá, com todo o histórico — cada commit das aulas anteriores, com mensagem, autor e data.</p>
+  <p>Lendo o comando por partes: <code>push</code> envia, <code>origin</code> é pra onde, <code>main</code> é qual branch. E o <code>-u</code>:</p>
+  <div class="rule">
+    <span class="tag">O que <code>-u</code> faz</span>
+    <p><code>-u</code> (ou <code>--set-upstream</code>) estabelece um <strong>vínculo permanente</strong> entre a sua branch local e a do remoto. Depois dele, <code>git push</code> e <code>git pull</code> sem argumento nenhum já sabem para onde ir.</p>
+    <p>Usa-se <strong>uma vez por branch</strong>, no primeiro push dela. Depois, só <code>git push</code>.</p>
+  </div>
+  <p>Faça um commit e teste a forma curta:</p>
+  <pre><code>echo "" &gt;&gt; README.md
+git commit -am "Ajusta README"
+git push</code></pre>
+
+  <h2 id="tracking">6. Branch de rastreamento</h2>
+  <p>Aquele vínculo criou uma coisa nova no seu repositório. Veja:</p>
+  <pre><code>git branch -a</code></pre>
+  <pre><code>* main
+  remotes/origin/main</code></pre>
+  <p><code>origin/main</code> é uma <strong>branch de rastreamento remoto</strong>. Entender o que ela é resolve metade das confusões com remoto:</p>
+  <div class="rule">
+    <span class="tag">O que <code>origin/main</code> é</span>
+    <p>Um ponteiro <strong>local</strong>, dentro do seu <code>.git</code>, que registra <strong>onde a <code>main</code> do remoto estava na última vez que você se comunicou com ele</strong>.</p>
+    <p>Não é o remoto. É a sua <strong>última foto conhecida</strong> do remoto — e ela só é atualizada quando você roda <code>fetch</code>, <code>pull</code> ou <code>push</code>. Entre uma comunicação e outra, ela pode estar desatualizada sem você saber.</p>
+  </div>
+  <p>É por isso que o Git consegue dizer "sua branch está 2 commits à frente de <code>origin/main</code>" sem acessar a rede: ele compara dois ponteiros locais.</p>
+  <pre><code>git status</code></pre>
+  <pre><code>On branch main
+Your branch is ahead of 'origin/main' by 1 commit.
+  (use "git push" to publish your local commits)</code></pre>
+  <p>Vocabulário que aparece o tempo todo:</p>
+  <table>
+    <thead>
+      <tr><th>Mensagem</th><th>Significa</th><th>O que fazer</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>ahead of 'origin/main' by N</code></td><td>Você tem N commits que o remoto não tem</td><td><code>git push</code></td></tr>
+      <tr><td><code>behind 'origin/main' by N</code></td><td>O remoto tem N commits que você não tem</td><td><code>git pull</code></td></tr>
+      <tr><td><code>diverged</code>, N and M different commits</td><td>Os dois lados andaram</td><td><code>git pull</code>, resolver, <code>git push</code></td></tr>
+      <tr><td><code>up to date</code></td><td>Iguais na última foto conhecida</td><td>Nada</td></tr>
+    </tbody>
+  </table>
+  <p>Para ver os vínculos de todas as branches:</p>
+  <pre><code>git branch -vv</code></pre>
+
+  <h2 id="clone">7. <code>git clone</code>: simulando um colega</h2>
+  <p>Pra entender o resto da aula de verdade, é preciso ter <strong>duas cópias</strong> conversando com o mesmo remoto — que é a situação real de um time. Vamos criar a segunda:</p>
+  <pre><code>cd ~/projetos
+git clone git@github.com:seuusuario/guia-de-cafes.git guia-de-cafes-colega</code></pre>
+  <pre><code>Cloning into 'guia-de-cafes-colega'...
+remote: Enumerating objects: 36, done.
+Receiving objects: 100% (36/36), done.</code></pre>
+  <p>O último argumento é opcional — sem ele, a pasta ganha o nome do repositório. Aqui damos outro nome só pra conviver com a original.</p>
+  <p>Daqui em diante, trate essa pasta como se fosse <strong>a máquina de outra pessoa</strong>. É exatamente o mesmo que acontece quando alguém entra no seu time e clona o projeto.</p>
+  <p>Repare no que o <code>clone</code> fez sozinho:</p>
+  <pre><code>cd ~/projetos/guia-de-cafes-colega
+git log --oneline | head -3
+git remote -v
+git branch -vv</code></pre>
+  <ul>
+    <li>Baixou <strong>todo o histórico</strong>, não só os arquivos atuais — é o "distribuído" da aula 1 na prática.</li>
+    <li>Configurou o remoto <code>origin</code> automaticamente.</li>
+    <li>Criou a <code>main</code> local já vinculada a <code>origin/main</code>. Não precisa de <code>-u</code> no primeiro push.</li>
+  </ul>
+
+  <h2 id="fetch-pull">8. <code>fetch</code> e <code>pull</code></h2>
+  <p>Faça o "colega" mandar um commit:</p>
+  <pre><code>cd ~/projetos/guia-de-cafes-colega
+echo "&lt;!-- revisado pelo colega --&gt;" &gt;&gt; index.html
+git commit -am "Marca revisao no index"
+git push</code></pre>
+  <p>Agora volte pra sua pasta original, que <strong>não sabe</strong> desse commit:</p>
+  <pre><code>cd ~/projetos/guia-de-cafes
+git status</code></pre>
+  <pre><code>On branch main
+Your branch is up to date with 'origin/main'.</code></pre>
+  <p>Mentira — e é a mentira mais instrutiva desta aula. O Git está comparando com <code>origin/main</code>, a <strong>foto antiga</strong> da seção 6. Ele não vai à rede pra responder <code>git status</code>.</p>
+
+  <h3>8.1 <code>fetch</code>: baixar sem mexer</h3>
+  <pre><code>git fetch</code></pre>
+  <pre><code>remote: Enumerating objects: 5, done.
+From github.com:seuusuario/guia-de-cafes
+   a1b2c3d..e4f5g6h  main       -&gt; origin/main</code></pre>
+  <p>O <code>fetch</code> baixa os commits novos e <strong>atualiza a foto</strong> (<code>origin/main</code>). Ele <strong>não</strong> encosta na sua branch nem nos seus arquivos. Abra o <code>index.html</code>: o comentário do colega não está lá.</p>
+  <pre><code>git status</code></pre>
+  <pre><code>On branch main
+Your branch is behind 'origin/main' by 1 commit, and can be fast-forwarded.
+  (use "git pull" to update your local branch)</code></pre>
+  <p>Agora sim a informação é real. Dá pra inspecionar antes de aceitar:</p>
+  <pre><code>git log --oneline main..origin/main    # o que veio que eu não tenho
+git diff main origin/main              # o que muda no código</code></pre>
+  <p><strong><code>fetch</code> é sempre seguro.</strong> Ele nunca altera seu trabalho, nunca gera conflito, nunca perde nada. Pode rodar a qualquer momento.</p>
+
+  <h3>8.2 <code>pull</code>: baixar e integrar</h3>
+  <pre><code>git pull</code></pre>
+  <pre><code>Updating a1b2c3d..e4f5g6h
+Fast-forward
+ index.html | 1 +
+ 1 file changed, 1 insertion(+)</code></pre>
+  <p>Agora o comentário está no seu arquivo.</p>
+  <div class="rule">
+    <span class="tag">A relação entre os dois</span>
+    <p><code>git pull</code> = <code>git fetch</code> + <code>git merge origin/main</code></p>
+    <p>Não é comando novo: é a composição de dois que você já conhece. E, sendo um merge, <strong>ele pode gerar conflito</strong> — o mesmo conflito da aula 5, resolvido do mesmo jeito.</p>
+  </div>
+  <p>Repare que este <code>pull</code> foi <strong>fast-forward</strong>: sua branch não tinha andado, então bastou mover o ponteiro (aula 4, seção 8). É o caso feliz.</p>
+
+  <h2 id="pull-rebase">9. <code>pull --rebase</code></h2>
+  <p>O caso não-feliz é quando <strong>os dois lados andaram</strong>. Provoque:</p>
+  <pre><code># na pasta do colega
+cd ~/projetos/guia-de-cafes-colega
+echo "Contribuicoes sao bem-vindas." &gt;&gt; README.md
+git commit -am "Convida contribuicoes no README"
+git push</code></pre>
+  <pre><code># na sua pasta, sem puxar antes
+cd ~/projetos/guia-de-cafes
+echo "&lt;!-- rascunho de seçao de moagem --&gt;" &gt;&gt; index.html
+git commit -am "Anota rascunho de moagem"</code></pre>
+  <p>Cada lado tem um commit que o outro não tem. Um <code>git pull</code> comum resolve isso com um merge, e o histórico ganha uma linha estranha:</p>
+  <pre><code>Merge branch 'main' of github.com:seuusuario/guia-de-cafes</code></pre>
+  <p>Esse commit não representa decisão nenhuma — é só o registro de que duas pessoas trabalharam ao mesmo tempo. Num time ativo, ele aparece dezenas de vezes por semana e polui o histórico sem informar nada.</p>
+  <p>A alternativa:</p>
+  <pre><code>git pull --rebase</code></pre>
+  <p>Em vez de criar merge commit, o Git <strong>pega os seus commits locais e reaplica em cima do que veio do remoto</strong>, deixando a história em linha reta:</p>
+  <pre><code>Com pull comum:
+──&gt; colega ──┐
+             ├──&gt; Merge branch 'main'
+──&gt; seu    ──┘
+
+Com pull --rebase:
+──&gt; colega ──&gt; seu (recriado em cima)</code></pre>
+  <p>Como isso reescreve seus commits locais — que ganham hashes novos —, vale a ressalva da aula 3: só é seguro porque <strong>esses commits ainda não tinham sido publicados</strong>. O mecanismo completo do rebase, incluindo o que fazer quando ele dá conflito no meio, é a aula 8.</p>
+  <p>Muita gente adota como padrão:</p>
+  <pre><code>git config --global pull.rebase true</code></pre>
+  <p>Com isso, <code>git pull</code> passa a se comportar como <code>git pull --rebase</code> sempre. É configuração comum em time que preza histórico linear — e é decisão coletiva, não individual: vale combinar antes.</p>
+  <div class="callout"><p><strong>Se você nunca configurou nada</strong>, o Git 2.27+ imprime um aviso no primeiro <code>pull</code> divergente pedindo pra você escolher entre <code>merge</code>, <code>rebase</code> ou <code>fast-forward only</code>. Não é erro: é ele pedindo uma decisão que não quer tomar por você.</p></div>
+
+  <h2 id="rejeitado">10. Push rejeitado</h2>
+  <p>Este é o erro mais comum de quem começa a trabalhar com remoto. Provoque de propósito — ainda com a divergência da seção anterior, se você não fez o pull:</p>
+  <pre><code>git push</code></pre>
+  <pre><code>To github.com:seuusuario/guia-de-cafes.git
+ ! [rejected]        main -&gt; main (fetch first)
+error: failed to push some refs to 'github.com:seuusuario/guia-de-cafes.git'
+hint: Updates were rejected because the remote contains work that you do
+hint: not have locally. This is usually caused by another repository pushing
+hint: to the same ref. You may want to first integrate the remote changes
+hint: (e.g., 'git pull ...') before pushing again.</code></pre>
+  <p>Traduzindo: <strong>o remoto tem commits que você não tem</strong>. Aceitar o seu push apagaria o trabalho da outra pessoa, então o Git recusa.</p>
+  <p>Isso é o <em>non-fast-forward</em> — o mesmo conceito da aula 4, do outro lado. O push só é aceito quando ele consegue simplesmente <strong>arrastar o ponteiro do remoto pra frente</strong>. Se as histórias divergiram, não dá.</p>
+  <div class="rule">
+    <span class="tag">A solução, sempre</span>
+    <p><strong>Puxe antes de empurrar.</strong> <code>git pull</code> (ou <code>git pull --rebase</code>), resolva conflito se houver, e então <code>git push</code>.</p>
+  </div>
+  <pre><code>git pull --rebase
+git push</code></pre>
+  <div class="warn">
+    <p><strong>O que você vai ver na internet — e não deve fazer:</strong> a resposta rápida pra esse erro costuma ser <code>git push --force</code>. Ele funciona, e funciona porque <strong>sobrescreve o remoto com a sua versão, apagando os commits que estavam lá</strong>. Em repositório compartilhado, é assim que se apaga o trabalho de um colega — sem aviso, e sem que ele saiba antes de perceber que sumiu.</p>
+    <p>Existe uso legítimo pra force push, e existe uma variante bem menos perigosa (<code>--force-with-lease</code>). As duas coisas são assunto da aula 8, depois que o rebase estiver entendido. Até lá: <strong>diante de push rejeitado, a resposta é <code>pull</code>.</strong></p>
+  </div>
+
+  <h2 id="branches-remotas">11. Branches no remoto</h2>
+  <p>Branch local é sua e ninguém vê. Pra outras pessoas acessarem, precisa ser publicada:</p>
+  <pre><code>git switch -c metodos-quentes
+# ... commits ...
+git push -u origin metodos-quentes</code></pre>
+  <p>De novo o <code>-u</code>: primeira vez de cada branch. Depois disso, <code>git push</code> sozinho.</p>
+  <p>Do outro lado, quem clonou vê a branch nova depois de um <code>fetch</code>:</p>
+  <pre><code>cd ~/projetos/guia-de-cafes-colega
+git fetch
+git branch -a</code></pre>
+  <pre><code>* main
+  remotes/origin/main
+  remotes/origin/metodos-quentes</code></pre>
+  <p>E cria uma cópia local pra trabalhar:</p>
+  <pre><code>git switch metodos-quentes</code></pre>
+  <p>Não precisa de <code>-c</code>: quando existe uma branch remota com esse nome, o <code>switch</code> cria a local já vinculada. É atalho de conveniência que você vai usar toda semana.</p>
+
+  <h3>11.1 Apagando branch remota</h3>
+  <p>Deletar a local (aula 4) não mexe no remoto. São dois comandos:</p>
+  <pre><code>git branch -d metodos-quentes            # apaga a local
+git push origin --delete metodos-quentes # apaga a do remoto</code></pre>
+  <p>Na prática, quem faz o segundo é o próprio GitHub: o botão de merge do Pull Request oferece apagar a branch junto (aula 7).</p>
+
+  <h3>11.2 Limpando referências mortas</h3>
+  <p>Quando alguém apaga uma branch no remoto, sua lista local continua mostrando <code>origin/aquela-branch</code> — a foto antiga, de novo. Para limpar:</p>
+  <pre><code>git fetch --prune</code></pre>
+  <p>Remove as referências a branches que não existem mais no remoto. Não apaga nada seu.</p>
+
+  <h2 id="erros-comuns">12. Erros comuns nesta fase</h2>
+  <ol>
+    <li><strong>Criar o repositório no GitHub com README marcado</strong> tendo repositório local. Dá <code>refusing to merge unrelated histories</code>. Solução preventiva: criar vazio (seção 2.2).</li>
+    <li><strong>Achar que <code>git status</code> consulta o remoto.</strong> Não consulta. Rode <code>git fetch</code> antes se quiser informação atual.</li>
+    <li><strong>Esquecer o <code>-u</code> no primeiro push da branch.</strong> Não quebra nada: o Git responde com o comando completo pra copiar.</li>
+    <li><strong>Responder a push rejeitado com <code>--force</code>.</strong> Apaga trabalho alheio. A resposta é <code>pull</code>.</li>
+    <li><strong>Commitar credencial.</strong> Token, chave privada e <code>.env</code> não entram no repositório — ainda mais em repositório público. Se acontecer, <strong>rotacione a credencial</strong> (revogue o token, gere outra chave): removê-la do histórico não desfaz o vazamento. Aula 9.</li>
+    <li><strong>Trabalhar um dia inteiro sem dar push.</strong> Perde o backup e aumenta a chance de divergir do time. Push ao menos uma vez por dia.</li>
+  </ol>
+
+  <h2 id="checklist">13. Checklist antes de seguir</h2>
+  <div class="checklist">
+    <ul>
+      <li><code>ssh -T git@github.com</code> responde com seu usuário (ou o token HTTPS funciona)</li>
+      <li>O <code>guia-de-cafes</code> está no GitHub com todo o histórico visível</li>
+      <li>Existe a segunda pasta clonada, e as duas conversam com o mesmo remoto</li>
+      <li>Você sabe explicar o que <code>origin/main</code> é, e por que pode estar desatualizado</li>
+      <li>Sabe a diferença entre <code>fetch</code> e <code>pull</code> em uma frase</li>
+      <li>Provocou um push rejeitado e resolveu com <code>pull</code></li>
+      <li>Sabe o que <code>-u</code> faz e quando usar</li>
+      <li>Sabe por que <code>git push --force</code> é perigoso em repositório compartilhado</li>
+    </ul>
+  </div>
+
+  <h2 id="proximos-passos">14. O que vem a seguir</h2>
+  <p>Você tem tudo que é preciso pra trabalhar sozinho com um remoto. Falta o que transforma isso em trabalho de time.</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Fluxo de time: branch, Pull Request, code review</strong> — por que ninguém commita direto na <code>main</code>, como abrir um PR, como revisar o PR de outra pessoa, as três formas de merge do GitHub (merge commit, squash, rebase), branch protection, o CI travando o merge, convenções de nome de branch e commit, e os modelos de fluxo com nome: GitHub Flow, GitFlow e trunk-based.</li>
+      <li><strong>Rebase e histórico limpo</strong> — o mecanismo por trás do <code>pull --rebase</code>, <code>rebase -i</code> e o force push feito direito.</li>
+      <li><strong>Rede de segurança</strong> — <code>stash</code>, <code>reflog</code> e recuperação.</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Mantenha as duas pastas — <code>guia-de-cafes</code> e <code>guia-de-cafes-colega</code> — até o fim da trilha. Elas são o jeito mais barato de praticar sozinho tudo que normalmente exigiria outra pessoa: push rejeitado, conflito vindo do remoto, revisar código de terceiro, branch aparecendo do nada. A partir da aula 7 elas passam a ser usadas o tempo todo.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

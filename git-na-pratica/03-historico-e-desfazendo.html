@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Navegando o histórico e desfazendo</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="02-primeiro-repositorio.html">&larr; 2. Primeiro repositório: o ciclo básico</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#ponto-de-partida">1. Ponto de partida</a></li>
+    <li><a href="#log-filtros">2. <code>git log</code> com filtros</a></li>
+    <li><a href="#show">3. <code>git show</code>: abrindo um commit</a></li>
+    <li><a href="#diff">4. <code>git diff</code>: as três comparações</a></li>
+    <li><a href="#referencias">5. Como apontar para um commit</a></li>
+    <li><a href="#niveis">6. Os cinco níveis de desfazer</a></li>
+    <li><a href="#restore">7. Nível 1 e 2: <code>restore</code></a></li>
+    <li><a href="#amend">8. Nível 3: <code>commit --amend</code></a></li>
+    <li><a href="#reset">9. Nível 4: <code>reset</code></a></li>
+    <li><a href="#revert">10. Nível 5: <code>revert</code></a></li>
+    <li><a href="#reset-vs-revert">11. A pergunta que decide entre os dois</a></li>
+    <li><a href="#tabela">12. Tabela: quero desfazer X, use Y</a></li>
+    <li><a href="#checkout">13. Por que a internet manda usar <code>checkout</code></a></li>
+    <li><a href="#erros-comuns">14. Erros comuns nesta fase</a></li>
+    <li><a href="#checklist">15. Checklist antes de seguir</a></li>
+    <li><a href="#proximos-passos">16. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="04-branches.html">4. Branches: trabalhar em paralelo &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Material de estudo — Git na prática — Parte 3</div>
+  <h1>Navegando o histórico e desfazendo</h1>
+  <p class="subtitle">Você já sabe criar histórico. Esta aula é a outra metade: <strong>consultar</strong> o que foi feito e <strong>voltar atrás</strong> quando algo sai errado. É a aula que mais gera pergunta em time real — não porque os comandos sejam difíceis, mas porque são <em>parecidos</em>, e escolher o errado num repositório compartilhado dá trabalho pra todo mundo. A ideia aqui é você sair com um critério de decisão, não com uma lista de comandos decorada.</p>
+
+  <h2 id="ponto-de-partida">1. Ponto de partida</h2>
+  <p>Tudo nesta aula acontece no <code>guia-de-cafes</code> da aula 2. Entre na pasta e confira onde você está:</p>
+  <pre><code>cd ~/projetos/guia-de-cafes
+git log --oneline
+git status</code></pre>
+  <p>Você deve ver alguns commits e <code>working tree clean</code>. Os hashes dos exemplos desta aula <strong>serão diferentes dos seus</strong> — sempre são. Troque pelos que aparecerem no seu terminal.</p>
+  <div class="callout"><p><strong>Antes de começar, uma boa notícia:</strong> quase nada no Git se perde de verdade. Commit que "sumiu" costuma continuar guardado, alcançável pelo <code>git reflog</code> por semanas. A aula 9 é inteira sobre isso. Vale saber disso agora pra experimentar esta aula sem medo — o único comando desta aula que destrói trabalho de forma realmente irrecuperável está sinalizado na seção 9, e ele destrói apenas o que <strong>nunca foi commitado</strong>.</p></div>
+
+  <h2 id="log-filtros">2. <code>git log</code> com filtros</h2>
+  <p>Na aula 2 o <code>log</code> apareceu na forma crua. Em projeto real, o histórico tem milhares de commits, e o que se faz é <strong>procurar</strong>. Os filtros abaixo se combinam livremente.</p>
+
+  <h3>2.1 Quantidade e formato</h3>
+  <pre><code>git log --oneline -5              # os 5 mais recentes, uma linha cada
+git log --stat -3                 # mostra quais arquivos mudaram e quanto
+git log -p -1                     # mostra o conteúdo da mudança (o diff) do último commit</code></pre>
+  <p>O <code>--stat</code> é o meio-termo mais útil: dá o resumo sem despejar o diff inteiro.</p>
+  <pre><code>git log --stat -1</code></pre>
+  <pre><code>commit 9c4d7e15a2b8f3c6d9e0a1b2c3d4e5f6a7b8c9d0 (HEAD -&gt; main)
+Author: Seu Nome &lt;seu@email.com&gt;
+Date:   Thu Aug 28 14:32:10 2025 -0300
+
+    Explica o proposito do projeto no README
+
+ README.md | 2 ++
+ 1 file changed, 2 insertions(+)</code></pre>
+
+  <h3>2.2 Filtros de busca</h3>
+  <table>
+    <thead>
+      <tr><th>Comando</th><th>Encontra</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>git log --author="Felipe"</code></td><td>Commits de uma pessoa. Casa por pedaço do nome ou e-mail</td></tr>
+      <tr><td><code>git log --grep="prensa"</code></td><td>Commits cuja <strong>mensagem</strong> contém o termo</td></tr>
+      <tr><td><code>git log -S "espresso"</code></td><td>Commits que <strong>adicionaram ou removeram</strong> esse texto no código. Diferente do <code>--grep</code>: procura na mudança, não na mensagem</td></tr>
+      <tr><td><code>git log --since="2 weeks ago"</code></td><td>Por data. Também aceita <code>--until</code>, e datas como <code>2025-08-01</code></td></tr>
+      <tr><td><code>git log -- index.html</code></td><td>Só commits que tocaram nesse arquivo. Os dois hífens separam "isto é caminho, não branch"</td></tr>
+    </tbody>
+  </table>
+  <p>O <code>-S</code> merece atenção: é o comando de "quando essa linha entrou no código, e em qual commit?". Numa investigação de bug, costuma achar em segundos o que a leitura manual não acha.</p>
+  <pre><code>git log --oneline --author="Felipe" --since="1 month ago" -- index.html</code></pre>
+  <p>Traduzindo: commits do Felipe, do último mês, que mexeram no <code>index.html</code>.</p>
+
+  <h3>2.3 O formato que a maioria dos times usa</h3>
+  <pre><code>git log --oneline --graph --decorate --all</code></pre>
+  <p>Quatro flags que andam juntas: <code>--graph</code> desenha as linhas do grafo, <code>--decorate</code> mostra os nomes de branch e tag, <code>--all</code> inclui todas as branches, não só a atual. Com um histórico linear como o seu agora, o resultado é modesto — a partir da aula 4 ele vira a forma padrão de enxergar o repositório.</p>
+  <div class="callout"><p><strong>Isso vira um atalho depois.</strong> Ninguém digita essas quatro flags todo dia; se cria um alias. Fica pra aula 10, junto com o resto da configuração de conforto.</p></div>
+
+  <h2 id="show">3. <code>git show</code>: abrindo um commit</h2>
+  <p>O <code>log</code> lista. O <code>show</code> abre <strong>um</strong> commit e mostra tudo dele — metadados e a mudança completa:</p>
+  <pre><code>git show 64a8889</code></pre>
+  <pre><code>commit 64a888952c1e4a7b0c3d6e9f2a5b8c1d4e7f0a3b
+Author: Seu Nome &lt;seu@email.com&gt;
+Date:   Thu Aug 28 14:28:44 2025 -0300
+
+    Adiciona coado e prensa francesa na lista
+
+diff --git a/index.html b/index.html
+index 3a5f1c2..8b9d4e7 100644
+--- a/index.html
++++ b/index.html
+@@ -8,6 +8,8 @@
+   &lt;ul&gt;
+     &lt;li&gt;Espresso&lt;/li&gt;
+<span class="ln-add">+    &lt;li&gt;Coado&lt;/li&gt;</span>
+<span class="ln-add">+    &lt;li&gt;Prensa francesa&lt;/li&gt;</span>
+   &lt;/ul&gt;</code></pre>
+  <p>Sem argumento, <code>git show</code> mostra o commit mais recente. Também dá pra pedir um arquivo específico dentro de um commit:</p>
+  <pre><code>git show 64a8889:index.html      # o arquivo inteiro como estava naquele commit</code></pre>
+
+  <h3>3.1 Lendo um diff</h3>
+  <p>Essa saída aparece no <code>show</code>, no <code>diff</code>, no code review do GitHub e no conflito de merge da aula 5. Vale decodificar de vez:</p>
+  <table>
+    <thead>
+      <tr><th>Linha</th><th>Significa</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>--- a/index.html</code></td><td>Versão <strong>antiga</strong> do arquivo</td></tr>
+      <tr><td><code>+++ b/index.html</code></td><td>Versão <strong>nova</strong></td></tr>
+      <tr><td><code>@@ -8,6 +8,8 @@</code></td><td>Cabeçalho do trecho: a partir da linha 8, antes eram 6 linhas, agora são 8</td></tr>
+      <tr><td>Linha com <code>+</code></td><td>Adicionada</td></tr>
+      <tr><td>Linha com <code>-</code></td><td>Removida</td></tr>
+      <tr><td>Linha sem sinal</td><td>Contexto — não mudou, está ali só pra você se localizar</td></tr>
+    </tbody>
+  </table>
+  <p>Uma linha <strong>alterada</strong> aparece como um <code>-</code> seguido de um <code>+</code>. O Git não tem conceito de "linha editada": ele vê remoção mais adição.</p>
+
+  <h2 id="diff">4. <code>git diff</code>: as três comparações</h2>
+  <p>Aqui mora uma confusão clássica. <code>git diff</code> compara <strong>duas versões</strong>, e o resultado muda completamente dependendo de quais duas. Como existem três áreas (aula 2), existem três comparações possíveis.</p>
+  <p>Faça uma mudança pra ter o que comparar:</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.html</span> — dentro do <code>&lt;ul&gt;</code>, acrescente uma linha:</p>
+  </div>
+  <pre><code>    &lt;li&gt;Prensa francesa&lt;/li&gt;
+<span class="ln-add">    &lt;li&gt;Aeropress&lt;/li&gt;</span>
+  &lt;/ul&gt;</code></pre>
+
+  <h3>4.1 Working directory vs staging</h3>
+  <pre><code>git diff</code></pre>
+  <p>Sem argumento nenhum, o <code>diff</code> responde: <strong>"o que eu mudei e ainda não coloquei na caixa?"</strong> — working directory contra staging.</p>
+  <pre><code>diff --git a/index.html b/index.html
+--- a/index.html
++++ b/index.html
+@@ -10,6 +10,7 @@
+     &lt;li&gt;Prensa francesa&lt;/li&gt;
+<span class="ln-add">+    &lt;li&gt;Aeropress&lt;/li&gt;</span>
+   &lt;/ul&gt;</code></pre>
+  <p>Agora coloque no staging e rode de novo:</p>
+  <pre><code>git add index.html
+git diff</code></pre>
+  <p><strong>Saída vazia.</strong> Não é bug: não há mais diferença entre o working directory e o staging — as duas áreas estão iguais. É exatamente aqui que a maioria trava na primeira vez.</p>
+
+  <h3>4.2 Staging vs último commit</h3>
+  <pre><code>git diff --staged</code></pre>
+  <p>Responde: <strong>"o que vai entrar se eu commitar agora?"</strong> — staging contra o último commit. A linha do Aeropress reaparece.</p>
+  <p><code>--cached</code> é sinônimo de <code>--staged</code>; você vai ver os dois por aí.</p>
+  <div class="rule">
+    <span class="tag">O hábito que separa</span>
+    <p>Rodar <code>git diff --staged</code> <strong>imediatamente antes de todo <code>git commit</code></strong>. É a última chance de ver exatamente o que está sendo gravado — e é assim que se pega o <code>console.log</code> esquecido, a senha coladinha por engano e o arquivo que entrou junto sem querer.</p>
+  </div>
+
+  <h3>4.3 Comparando commits</h3>
+  <pre><code>git diff 49413d5 4e993b8           # entre dois commits
+git diff 49413d5                   # de um commit até o estado atual
+git diff HEAD~2 HEAD -- index.html # só um arquivo, entre dois pontos</code></pre>
+  <p>A ordem importa: o primeiro argumento é o "antes", o segundo é o "depois". Inverter mostra o diff de cabeça pra baixo.</p>
+
+  <h3>4.4 Resumindo as três</h3>
+  <table>
+    <thead>
+      <tr><th>Comando</th><th>Compara</th><th>Pergunta que responde</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>git diff</code></td><td>Working directory &times; staging</td><td>O que mudei e ainda não adicionei?</td></tr>
+      <tr><td><code>git diff --staged</code></td><td>Staging &times; último commit</td><td>O que vai entrar no commit?</td></tr>
+      <tr><td><code>git diff HEAD</code></td><td>Working directory &times; último commit</td><td>Tudo que mudei desde o último commit, adicionado ou não</td></tr>
+      <tr><td><code>git diff A B</code></td><td>Commit A &times; commit B</td><td>O que mudou entre esses dois pontos da história?</td></tr>
+    </tbody>
+  </table>
+  <p>Finalize o ciclo antes de seguir:</p>
+  <pre><code>git commit -m "Adiciona aeropress na lista"</code></pre>
+
+  <h2 id="referencias">5. Como apontar para um commit</h2>
+  <p>Os comandos de desfazer precisam que você diga <em>até onde</em> voltar. Existem três formas de nomear um commit, e a segunda é a que se usa no dia a dia:</p>
+  <table>
+    <thead>
+      <tr><th>Forma</th><th>Exemplo</th><th>Observação</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Hash</td><td><code>4e993b8</code></td><td>Os 7 primeiros caracteres bastam. Preciso, mas você precisa ir buscar no <code>log</code></td></tr>
+      <tr><td>Relativo a <code>HEAD</code></td><td><code>HEAD~1</code></td><td>"Um commit antes de onde estou". <code>HEAD~3</code> = três antes. É a forma mais usada</td></tr>
+      <tr><td>Nome de branch</td><td><code>main</code></td><td>Aponta pro commit mais recente daquela branch (aula 4)</td></tr>
+    </tbody>
+  </table>
+  <p>Lembrando da aula 2: <strong><code>HEAD</code> é "onde eu estou agora"</strong>, normalmente o commit mais recente da sua branch. Então:</p>
+  <pre><code>HEAD      # commit atual
+HEAD~1    # o anterior
+HEAD~2    # dois antes
+HEAD~5    # cinco antes</code></pre>
+  <div class="callout"><p><strong>Sobre o <code>^</code>:</strong> você vai encontrar <code>HEAD^</code> por aí, e nesta situação ele é igual a <code>HEAD~1</code>. Os dois só se diferenciam em commit de merge, que tem dois pais — assunto da aula 4. Por ora, use <code>~</code> e não se preocupe.</p></div>
+
+  <h2 id="niveis">6. Os cinco níveis de desfazer</h2>
+  <p>Antes dos comandos, o mapa. "Desfazer" no Git não é uma coisa só: depende de <strong>onde a mudança está</strong>. São cinco situações, da mais inofensiva pra mais delicada:</p>
+  <div class="step">
+    <div class="step-number">1</div>
+    <h3>Editei o arquivo e quero jogar fora</h3>
+    <p>A mudança está só no working directory. <code>git restore</code></p>
+  </div>
+  <div class="step">
+    <div class="step-number">2</div>
+    <h3>Fiz <code>add</code> e quero tirar da caixa</h3>
+    <p>A mudança está no staging. <code>git restore --staged</code></p>
+  </div>
+  <div class="step">
+    <div class="step-number">3</div>
+    <h3>Commitei e quero corrigir o último commit</h3>
+    <p>Errei a mensagem ou esqueci um arquivo. <code>git commit --amend</code></p>
+  </div>
+  <div class="step">
+    <div class="step-number">4</div>
+    <h3>Quero apagar um ou mais commits</h3>
+    <p>Só serve se ainda não foram compartilhados. <code>git reset</code></p>
+  </div>
+  <div class="step">
+    <div class="step-number">5</div>
+    <h3>Quero desfazer um commit que já foi publicado</h3>
+    <p>Apagar não é opção. <code>git revert</code></p>
+  </div>
+  <p>Repare no critério que separa o 4 do 5: <strong>o commit já saiu da sua máquina?</strong> Volta na seção 11.</p>
+
+  <h2 id="restore">7. Nível 1 e 2: <code>restore</code></h2>
+
+  <h3>7.1 Descartar mudança não commitada</h3>
+  <p>Estrague um arquivo de propósito:</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">README.md</span> — apague tudo e escreva qualquer bobagem:</p>
+  </div>
+  <pre><code>asdasdasd</code></pre>
+  <pre><code>git status</code></pre>
+  <pre><code>Changes not staged for commit:
+  (use "git restore &lt;file&gt;..." to discard changes in working directory)
+	modified:   README.md</code></pre>
+  <p>O próprio Git sugere a saída. Aceite:</p>
+  <pre><code>git restore README.md</code></pre>
+  <p>Abra o arquivo: voltou ao conteúdo do último commit. Para descartar tudo de uma vez, <code>git restore .</code>.</p>
+  <div class="warn"><p><strong>Este comando destrói trabalho sem rede de segurança.</strong> A mudança descartada nunca esteve num commit, então o <code>reflog</code> da aula 9 <strong>não</strong> recupera. É o único ponto desta aula onde o Git realmente apaga algo pra sempre — e ele não pergunta se você tem certeza. Antes de rodar <code>git restore .</code>, confira com <code>git diff</code> o que está prestes a sumir.</p></div>
+
+  <h3>7.2 Tirar do staging</h3>
+  <pre><code>git add README.md      # supondo que você adicionou por engano
+git restore --staged README.md</code></pre>
+  <p>A flag <code>--staged</code> muda o alvo: em vez de mexer no arquivo, ela <strong>tira da caixa</strong>. A alteração continua no seu arquivo, intacta — só saiu do próximo commit. Este comando é seguro: não perde nada.</p>
+  <table>
+    <thead>
+      <tr><th>Comando</th><th>Efeito no arquivo</th><th>Perde trabalho?</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>git restore arquivo</code></td><td>Volta ao conteúdo do último commit</td><td><span class="badge badge-err">Sim</span></td></tr>
+      <tr><td><code>git restore --staged arquivo</code></td><td>Nenhum. Só sai do staging</td><td><span class="badge badge-ok">Não</span></td></tr>
+    </tbody>
+  </table>
+  <p>Os dois juntos desfazem tudo que ainda não virou commit: <code>git restore --staged arquivo</code> seguido de <code>git restore arquivo</code>.</p>
+
+  <h2 id="amend">8. Nível 3: <code>commit --amend</code></h2>
+  <p>Duas situações resolvidas pelo mesmo comando, e as duas acontecem toda semana.</p>
+
+  <h3>8.1 Errei a mensagem</h3>
+  <pre><code>git commit --amend -m "Adiciona aeropress na lista de metodos"</code></pre>
+  <p>O commit anterior é substituído por um novo, com a mensagem corrigida e o mesmo conteúdo.</p>
+
+  <h3>8.2 Esqueci um arquivo</h3>
+  <p>Você commitou e percebeu que faltou algo que fazia parte da mesma mudança:</p>
+  <pre><code>git add arquivo-esquecido.html
+git commit --amend --no-edit</code></pre>
+  <p>O <code>--no-edit</code> diz "mantenha a mensagem como está". O que estava no staging entra no commit anterior, que continua sendo um commit só — em vez de virar um segundo commit "esqueci um arquivo", que polui o histórico.</p>
+
+  <div class="warn">
+    <p><strong>O <code>--amend</code> não edita o commit: ele cria outro.</strong> Da aula 1, seção 6.3 — o hash é calculado a partir do conteúdo, então qualquer alteração produz um commit diferente, com hash novo. O antigo deixa de fazer parte da história.</p>
+    <p>Consequência prática: <strong>só use <code>--amend</code> em commit que ainda não foi enviado pro remoto.</strong> Se já foi, o commit que você acabou de reescrever continua existindo na cópia das outras pessoas, e o Git vai recusar seu <code>push</code>. A regra completa está na seção 11.</p>
+  </div>
+
+  <h2 id="reset">9. Nível 4: <code>reset</code></h2>
+  <p>O <code>reset</code> <strong>move o ponteiro da branch pra trás</strong>. Os commits que ficaram pra frente saem da história.</p>
+  <pre><code>git log --oneline</code></pre>
+  <pre><code>4e993b8 (HEAD -&gt; main) Explica o proposito do projeto no readme
+64a8889 Adiciona coado e prensa francesa
+49413d5 Cria estrutura inicial</code></pre>
+  <p>Rodar <code>git reset 49413d5</code> faz a <code>main</code> voltar a apontar pro primeiro commit. Os outros dois somem do <code>log</code>.</p>
+  <p>A pergunta que sobra é: <strong>e as alterações que estavam neles?</strong> É isso que as três flags decidem.</p>
+
+  <h3>9.1 As três formas</h3>
+  <table>
+    <thead>
+      <tr><th>Comando</th><th>Commits</th><th>Staging</th><th>Seus arquivos</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>git reset --soft &lt;commit&gt;</code></td><td>Somem</td><td>Alterações ficam aqui</td><td><span class="badge badge-ok">Preservados</span></td></tr>
+      <tr><td><code>git reset --mixed &lt;commit&gt;</code></td><td>Somem</td><td>Limpo</td><td><span class="badge badge-ok">Preservados</span></td></tr>
+      <tr><td><code>git reset --hard &lt;commit&gt;</code></td><td>Somem</td><td>Limpo</td><td><span class="badge badge-err">Descartados</span></td></tr>
+    </tbody>
+  </table>
+  <p><code>--mixed</code> é o padrão: <code>git reset HEAD~1</code> sem flag nenhuma faz isso.</p>
+  <p>Traduzindo pra situação real:</p>
+  <ul>
+    <li><strong><code>--soft</code></strong> — "esses commits não deviam ser separados". As mudanças voltam pro staging, prontas pra virar um commit só. É o jeito mais simples de juntar três commits pequenos em um antes de mostrar pra alguém.</li>
+    <li><strong><code>--mixed</code></strong> — "quero refazer esses commits do zero, escolhendo melhor o que entra em cada um". As mudanças ficam na pasta, fora do staging.</li>
+    <li><strong><code>--hard</code></strong> — "esse trabalho todo foi um erro, quero o estado daquele commit e mais nada".</li>
+  </ul>
+
+  <h3>9.2 Exemplo prático: juntando dois commits</h3>
+  <p>Faça dois commits bobos, um depois do outro:</p>
+  <pre><code>echo "&lt;!-- rascunho --&gt;" &gt;&gt; index.html
+git commit -am "Comeca rascunho"
+echo "&lt;!-- rascunho 2 --&gt;" &gt;&gt; index.html
+git commit -am "Continua rascunho"</code></pre>
+  <p>Dois commits que deveriam ser um. Junte:</p>
+  <pre><code>git reset --soft HEAD~2
+git status</code></pre>
+  <pre><code>Changes to be committed:
+	modified:   index.html</code></pre>
+  <p>Os dois commits sumiram, e as alterações dos dois estão no staging, juntas. Agora vira um commit só:</p>
+  <pre><code>git commit -m "Adiciona comentarios de rascunho no index"</code></pre>
+  <p>Isso é a versão manual do "squash" que a aula 8 automatiza com <code>rebase -i</code>.</p>
+
+  <h3>9.3 O <code>--hard</code></h3>
+  <div class="warn">
+    <p><strong>Comando destrutivo — leia antes de rodar.</strong> <code>git reset --hard</code> descarta, sem confirmação:</p>
+    <ul>
+      <li>os commits à frente do ponto escolhido;</li>
+      <li>tudo que estiver no staging;</li>
+      <li><strong>todas as alterações não commitadas nos seus arquivos.</strong></li>
+    </ul>
+    <p>Os commits são recuperáveis pelo <code>git reflog</code> (aula 9) por cerca de 30 dias. <strong>As alterações não commitadas não são recuperáveis por nada.</strong></p>
+    <p>Antes de rodar: <code>git status</code> e confirme <code>working tree clean</code>.</p>
+  </div>
+  <p>Com essa ressalva feita, o uso legítimo:</p>
+  <pre><code>git status                    # confirme: working tree clean
+git reset --hard HEAD~2       # descarta os 2 últimos commits</code></pre>
+  <p>Um jeito barato de trabalhar sem risco enquanto você não tem intimidade com o comando: antes do <code>reset</code>, rode <code>git branch backup</code>. Isso deixa uma marca no commit atual, e você volta pra ela quando quiser. Branch é assunto da aula 4, mas o comando funciona hoje.</p>
+
+  <h2 id="revert">10. Nível 5: <code>revert</code></h2>
+  <p>O <code>revert</code> resolve o mesmo problema por um caminho oposto: em vez de apagar o commit, ele cria <strong>um commit novo que aplica o inverso</strong> do que o outro fez.</p>
+  <pre><code>git log --oneline</code></pre>
+  <pre><code>a7b3c91 (HEAD -&gt; main) Adiciona comentarios de rascunho no index
+9c4d7e1 Adiciona aeropress na lista
+4e993b8 Explica o proposito do projeto no readme</code></pre>
+  <p>Desfaça o commit de rascunho:</p>
+  <pre><code>git revert a7b3c91</code></pre>
+  <p>O Git abre o editor com uma mensagem já pronta (<code>Revert "Adiciona comentarios de rascunho no index"</code>). Salve e feche — ou use <code>--no-edit</code> pra aceitar direto.</p>
+  <pre><code>git log --oneline</code></pre>
+  <pre><code>f2e8d40 (HEAD -&gt; main) Revert "Adiciona comentarios de rascunho no index"
+a7b3c91 Adiciona comentarios de rascunho no index
+9c4d7e1 Adiciona aeropress na lista
+4e993b8 Explica o proposito do projeto no readme</code></pre>
+  <p>Os comentários de rascunho sumiram do arquivo, mas <strong>o histórico cresceu em vez de encolher</strong>. Os dois commits — o original e o que o desfez — continuam lá, e é possível ver que a mudança existiu e foi revertida.</p>
+  <p>Para reverter vários, liste do mais novo pro mais antigo:</p>
+  <pre><code>git revert --no-edit HEAD HEAD~1</code></pre>
+  <p>A ordem importa: reverter de trás pra frente aplica os inversos na sequência correta e evita conflito.</p>
+  <div class="callout"><p><strong>Reverter um <code>revert</code> funciona.</strong> Como o revert é só mais um commit, dá pra revertê-lo e trazer a mudança de volta. Acontece de verdade: desfaz-se uma funcionalidade que quebrou produção, corrige-se com calma, e ela volta.</p></div>
+
+  <h2 id="reset-vs-revert">11. A pergunta que decide entre os dois</h2>
+  <p><code>reset</code> e <code>revert</code> chegam ao mesmo estado de código. A escolha não é de gosto:</p>
+  <div class="rule">
+    <span class="tag">O critério</span>
+    <p><strong>O commit já saiu da sua máquina?</strong></p>
+    <p><strong>Não</strong> (só local, nunca deu <code>push</code>) — <code>reset</code> é livre. Ninguém mais viu aqueles commits, então apagá-los não afeta pessoa nenhuma.</p>
+    <p><strong>Sim</strong> (já foi pro remoto, outras pessoas podem ter puxado) — use <code>revert</code>. Sempre.</p>
+  </div>
+  <p>O motivo é o hash, de novo. Quando você apaga commits que outras pessoas já baixaram, a história delas e a sua deixam de bater. Elas vão puxar, o Git vai tentar reconciliar duas versões diferentes do mesmo passado, e os commits que você apagou <em>voltam</em> — trazidos pela cópia delas. O resultado é um histórico embaralhado que alguém vai ter que arrumar na mão.</p>
+  <p>Isso tem nome — <strong>a regra de ouro: não reescreva histórico compartilhado</strong> — e vale pro <code>reset</code>, pro <code>--amend</code> e pro <code>rebase</code> da aula 8, que é onde o assunto é fechado.</p>
+  <div class="example">
+    <div class="good">
+      <h4>Commit ainda local</h4>
+      <pre><code>git reset --soft HEAD~2
+git commit -m "mensagem melhor"</code></pre>
+      <p>Histórico limpo, ninguém foi afetado.</p>
+    </div>
+    <div class="bad">
+      <h4>Commit já publicado</h4>
+      <pre><code>git reset --hard HEAD~2
+git push --force</code></pre>
+      <p>Reescreve a história de todo mundo. Em time, é assim que se apaga o trabalho de um colega sem perceber.</p>
+    </div>
+  </div>
+  <p>Enquanto o repositório é só seu e local — o caso do <code>guia-de-cafes</code> até a aula 6 — nenhum comando desta aula tem consequência pra outra pessoa. Experimente à vontade agora; é justamente pra isso que o projeto de estudo existe.</p>
+
+  <h2 id="tabela">12. Tabela: quero desfazer X, use Y</h2>
+  <p>A referência da aula. Vale voltar aqui em vez de tentar lembrar.</p>
+  <table>
+    <thead>
+      <tr><th>Situação</th><th>Comando</th><th>Risco</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Editei o arquivo e quero jogar a mudança fora</td><td><code>git restore arquivo</code></td><td><span class="badge badge-err">Perde a mudança pra sempre</span></td></tr>
+      <tr><td>Quero jogar fora tudo que não commitei</td><td><code>git restore .</code></td><td><span class="badge badge-err">Perde tudo pra sempre</span></td></tr>
+      <tr><td>Fiz <code>add</code> por engano</td><td><code>git restore --staged arquivo</code></td><td><span class="badge badge-ok">Seguro</span></td></tr>
+      <tr><td>Errei a mensagem do último commit</td><td><code>git commit --amend -m "nova"</code></td><td><span class="badge badge-warn">Só se não deu push</span></td></tr>
+      <tr><td>Esqueci um arquivo no último commit</td><td><code>git add arq</code> + <code>git commit --amend --no-edit</code></td><td><span class="badge badge-warn">Só se não deu push</span></td></tr>
+      <tr><td>Quero juntar os 3 últimos commits em um</td><td><code>git reset --soft HEAD~3</code> + <code>git commit</code></td><td><span class="badge badge-warn">Só se não deu push</span></td></tr>
+      <tr><td>Quero apagar o último commit, mas manter o código</td><td><code>git reset HEAD~1</code></td><td><span class="badge badge-warn">Só se não deu push</span></td></tr>
+      <tr><td>Quero apagar o último commit e o código junto</td><td><code>git reset --hard HEAD~1</code></td><td><span class="badge badge-err">Destrutivo</span></td></tr>
+      <tr><td>Quero desfazer um commit que já foi pro remoto</td><td><code>git revert &lt;hash&gt;</code></td><td><span class="badge badge-ok">Seguro</span></td></tr>
+      <tr><td>Quero ver como um arquivo estava num commit antigo</td><td><code>git show &lt;hash&gt;:arquivo</code></td><td><span class="badge badge-ok">Só leitura</span></td></tr>
+      <tr><td>Quero um arquivo de volta como estava num commit</td><td><code>git restore --source=&lt;hash&gt; arquivo</code></td><td><span class="badge badge-warn">Sobrescreve o arquivo atual</span></td></tr>
+      <tr><td>Fiz merda e quero recuperar commit apagado</td><td><code>git reflog</code> (aula 9)</td><td><span class="badge badge-ok">Só leitura</span></td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="checkout">13. Por que a internet manda usar <code>checkout</code></h2>
+  <p>Ao procurar qualquer coisa desta aula fora daqui, você vai achar respostas com <code>git checkout</code>:</p>
+  <pre><code>git checkout -- arquivo.txt      # equivale a git restore arquivo.txt
+git checkout abc1234             # navegar até um commit antigo</code></pre>
+  <p>Não está errado — funciona até hoje. É que o <code>checkout</code> era um comando sobrecarregado: trocava de branch, restaurava arquivo, navegava pra um commit, criava branch. Coisas sem relação, com uma sintaxe em que dois hífens fora do lugar mudavam completamente o efeito.</p>
+  <p>Na versão <strong>2.23 (2019)</strong>, o Git separou as responsabilidades:</p>
+  <table>
+    <thead>
+      <tr><th>Antes</th><th>Hoje</th><th>Faz</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>git checkout -- arquivo</code></td><td><code>git restore arquivo</code></td><td>Mexe em arquivo</td></tr>
+      <tr><td><code>git checkout branch</code></td><td><code>git switch branch</code></td><td>Mexe em branch (aula 4)</td></tr>
+    </tbody>
+  </table>
+  <p>Use <code>restore</code> e <code>switch</code>: são mais claros e mais difíceis de usar errado. Mas <strong>saiba ler <code>checkout</code></strong>, porque ele está em toda resposta antiga de fórum, em documentação de projeto e no dedo de quem aprendeu Git antes de 2019 — e não vai sumir tão cedo.</p>
+
+  <h2 id="erros-comuns">14. Erros comuns nesta fase</h2>
+  <ol>
+    <li><strong>Rodar <code>git diff</code> depois do <code>add</code> e achar que a mudança sumiu.</strong> Ela está no staging. Use <code>git diff --staged</code>.</li>
+    <li><strong>Usar <code>--hard</code> como reflexo.</strong> A maioria dos casos quer <code>--soft</code> ou <code>--mixed</code>. O <code>--hard</code> é o único que apaga arquivo, e quase nunca é o que se precisa.</li>
+    <li><strong><code>reset</code> em commit já publicado.</strong> Funciona na sua máquina e quebra pro time. É <code>revert</code>.</li>
+    <li><strong><code>--amend</code> depois do push.</strong> Mesmo problema: o commit já está na mão dos outros.</li>
+    <li><strong>Entrar em pânico e apagar a pasta.</strong> Quase tudo é recuperável (aula 9). Apagar o <code>.git</code> é o único jeito garantido de perder de verdade.</li>
+    <li><strong>Confundir <code>revert</code> com "voltar pra um commit antigo".</strong> <code>git revert abc123</code> desfaz <em>aquele commit específico</em>, não tudo que veio depois dele.</li>
+  </ol>
+
+  <h2 id="checklist">15. Checklist antes de seguir</h2>
+  <div class="checklist">
+    <ul>
+      <li>Você sabe dizer o que <code>git diff</code> e <code>git diff --staged</code> comparam, sem consultar</li>
+      <li>Consegue achar todos os commits que tocaram no <code>index.html</code></li>
+      <li>Sabe ler um diff: <code>+</code>, <code>-</code>, contexto e o cabeçalho <code>@@</code></li>
+      <li>Sabe o que <code>HEAD~2</code> significa</li>
+      <li>Já usou <code>git restore</code> e <code>git restore --staged</code> e sabe qual dos dois perde trabalho</li>
+      <li>Já juntou dois commits com <code>git reset --soft</code></li>
+      <li>Já fez um <code>git revert</code> e viu o histórico crescer em vez de encolher</li>
+      <li>Sabe responder, em uma frase, quando usar <code>reset</code> e quando usar <code>revert</code></li>
+    </ul>
+  </div>
+
+  <h2 id="proximos-passos">16. O que vem a seguir</h2>
+  <p>Tudo até aqui aconteceu numa linha reta de commits, numa branch só. A partir da próxima aula, o histórico deixa de ser uma linha.</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Branches: trabalhar em paralelo</strong> — por que branch é só um ponteiro (e por que isso a torna barata), o que <code>HEAD</code> significa de verdade, <code>git switch -c</code>, <code>git branch</code>, as duas formas de merge (fast-forward e merge commit) e quando deletar uma branch.</li>
+      <li><strong>Conflitos de merge</strong> — provocar um de propósito no <code>guia-de-cafes</code> e resolver na mão.</li>
+      <li><strong>Repositório remoto</strong> — o projeto sai da sua máquina e vai pro GitHub.</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Esta é a aula que mais compensa praticar antes de seguir, porque os comandos são parecidos e a diferença entre eles só fica clara com o dedo. Sugestão: faça três ou quatro commits bobos no <code>guia-de-cafes</code> e desfaça cada um de um jeito diferente — um com <code>--amend</code>, um com <code>reset --soft</code>, um com <code>revert</code> — conferindo o <code>git log --oneline</code> depois de cada um. Enquanto o repositório for só seu, errar aqui não custa nada.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>

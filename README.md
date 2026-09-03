@@ -57,6 +57,26 @@ Trilha específica de stack (complementa a API REST, que é conceitual/independe
 21. [Empacotando com Docker](node-express/21-empacotando-com-docker.html) — `Dockerfile` e `.dockerignore`, ordem das camadas como cache, `USER node` em vez de root, `HEALTHCHECK` usando a rota da parte 20, e o que PID 1 faz com um SIGTERM sem handler.
 22. [Deploy com HTTPS](node-express/22-deploy-com-https.html) — API no Render e Postgres no Neon, `trust proxy` para o rate limit contar o IP certo, `SameSite=None` para o cookie sobreviver ao front em outro domínio, `render.yaml` versionado e migrations como passo de deploy.
 
+### [`git-na-pratica/`](git-na-pratica/) — Git
+
+Trilha de **lista fechada**: 10 aulas definidas antes da primeira linha ser escrita, do zero até o nível que o mercado cobra no dia a dia (branch, Pull Request, conflito, histórico limpo, recuperação). O roteiro completo, com o que entra e o que fica de fora, está em [git-na-pratica/README.md](git-na-pratica/README.md).
+
+1. [O que é Git e por que ele existe](git-na-pratica/01-o-que-e-git.html) — o problema que o controle de versão resolve, contexto histórico (Linux kernel, BitKeeper, Torvalds em 2005), centralizado vs distribuído, Git ≠ GitHub, commits como snapshots, instalação e `git config` inicial.
+
+2. [Primeiro repositório: o ciclo básico](git-na-pratica/02-primeiro-repositorio.html) — criar o projeto, `git init`, as três áreas (working directory, staging, repositório) e por que o staging existe, `status`, `add`, `commit`, `log`, mensagem de commit, `.gitignore` e o caso do arquivo já rastreado (`git rm --cached`).
+
+3. [Navegando o histórico e desfazendo](git-na-pratica/03-historico-e-desfazendo.html) — `log` com filtros, `show`, as três comparações do `diff`, referências (`HEAD~n`), os cinco níveis de desfazer (`restore`, `restore --staged`, `commit --amend`, `reset` nas três formas, `revert`), o critério `reset` vs `revert`, e a tabela "quero desfazer X, use Y".
+
+4. [Branches: trabalhar em paralelo](git-na-pratica/04-branches.html) — branch como ponteiro (e por que isso a torna barata), `HEAD` de verdade, `switch -c`, o que muda na pasta ao trocar de branch, detached HEAD, merge fast-forward vs merge commit, `--no-ff`, e deletar branch com `-d`/`-D`.
+
+5. [Conflitos de merge](git-na-pratica/05-conflitos-de-merge.html) — por que o Git resolve uns merges sozinho e outros não, conflito provocado de propósito, anatomia dos marcadores, resolução até o commit, `merge --abort`, `ours`/`theirs`, `merge.conflictStyle zdiff3` e o que reduz conflito num time.
+
+6. [Repositório remoto: GitHub](git-na-pratica/06-repositorio-remoto.html) — conta e repositório, SSH vs HTTPS com token, `remote add`, `push -u`, o que é `origin/main`, um segundo clone simulando um colega, `fetch` vs `pull`, `pull --rebase`, push rejeitado por non-fast-forward e branches no remoto.
+
+7. [Fluxo de time: branch, Pull Request, code review](git-na-pratica/07-fluxo-de-time.html) — por que ninguém commita na `main`, nomes de branch, Conventional Commits, abrir e descrever um PR, revisar o PR de outra pessoa, CI travando o merge, merge commit vs squash vs rebase, branch protection, e os modelos GitHub Flow, GitFlow e trunk-based.
+
+As demais aulas são criadas uma a uma, seguindo o roteiro do README da trilha.
+
 ## Estrutura do repositório
 
 ```
@@ -71,29 +91,38 @@ estudo/
 │   ├── 03-design-de-recursos-e-uris.html
 │   ├── 04-escolha-de-stack.html
 │   └── 05-primeira-api-funcional.html
-└── node-express/
-    ├── 01-node-express.html
-    ├── 02-projeto-academia.html
-    ├── 03-schema-do-banco.html
-    ├── 04-primeiro-endpoint-funcional.html
-    ├── 05-crud-instrutor-aula.html
-    ├── 06-matricula-e-regras.html
-    ├── 07-autenticacao-jwt.html
-    ├── 08-refresh-token.html
-    ├── 09-seguranca-de-borda.html
-    ├── 10-papeis-e-autorizacao.html
-    ├── 11-cookie-httponly.html
-    ├── 12-validacao-e-erros.html
-    ├── 13-transacoes-e-concorrencia.html
-    ├── 14-migrations.html
-    ├── 15-soft-delete-e-limpeza.html
-    ├── 16-testes-automatizados.html
-    ├── 17-integracao-continua.html
-    ├── 18-paginacao-filtro-ordenacao.html
-    ├── 19-documentacao-openapi.html
-    ├── 20-logs-e-health-check.html
-    ├── 21-empacotando-com-docker.html
-    └── 22-deploy-com-https.html
+├── node-express/
+│   ├── 01-node-express.html
+│   ├── 02-projeto-academia.html
+│   ├── 03-schema-do-banco.html
+│   ├── 04-primeiro-endpoint-funcional.html
+│   ├── 05-crud-instrutor-aula.html
+│   ├── 06-matricula-e-regras.html
+│   ├── 07-autenticacao-jwt.html
+│   ├── 08-refresh-token.html
+│   ├── 09-seguranca-de-borda.html
+│   ├── 10-papeis-e-autorizacao.html
+│   ├── 11-cookie-httponly.html
+│   ├── 12-validacao-e-erros.html
+│   ├── 13-transacoes-e-concorrencia.html
+│   ├── 14-migrations.html
+│   ├── 15-soft-delete-e-limpeza.html
+│   ├── 16-testes-automatizados.html
+│   ├── 17-integracao-continua.html
+│   ├── 18-paginacao-filtro-ordenacao.html
+│   ├── 19-documentacao-openapi.html
+│   ├── 20-logs-e-health-check.html
+│   ├── 21-empacotando-com-docker.html
+│   └── 22-deploy-com-https.html
+└── git-na-pratica/
+    ├── README.md
+    ├── 01-o-que-e-git.html
+    ├── 02-primeiro-repositorio.html
+    ├── 03-historico-e-desfazendo.html
+    ├── 04-branches.html
+    ├── 05-conflitos-de-merge.html
+    ├── 06-repositorio-remoto.html
+    └── 07-fluxo-de-time.html
 ```
 
 Novas trilhas de estudo entram como novos diretórios na raiz, seguindo o mesmo padrão: arquivos HTML numerados em ordem de leitura.

@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Branches: trabalhar em paralelo</title>
+<link rel="stylesheet" href="../styles.css">
+<script src="../scripts.js" defer></script>
+</head>
+<body>
+<button id="toc-show-btn">&#9776; Sumário</button>
+<div class="layout">
+
+<nav class="toc">
+  <button class="toc-hide-btn">Ocultar &times;</button>
+  <a class="toc-prev" href="03-historico-e-desfazendo.html">&larr; 3. Navegando o histórico e desfazendo</a>
+  <h2>Nesta página</h2>
+  <ol>
+    <li><a href="#problema">1. O problema que branch resolve</a></li>
+    <li><a href="#ponteiro">2. Branch é um ponteiro</a></li>
+    <li><a href="#head">3. <code>HEAD</code>: onde você está</a></li>
+    <li><a href="#criando">4. Criando e trocando de branch</a></li>
+    <li><a href="#trabalhando">5. Trabalhando na branch</a></li>
+    <li><a href="#trocar">6. O que acontece ao trocar de branch</a></li>
+    <li><a href="#detached">7. Detached HEAD: o aviso que assusta</a></li>
+    <li><a href="#merge-ff">8. Merge fast-forward</a></li>
+    <li><a href="#merge-commit">9. Merge commit</a></li>
+    <li><a href="#no-ff">10. Forçando merge commit com <code>--no-ff</code></a></li>
+    <li><a href="#deletar">11. Deletando branch</a></li>
+    <li><a href="#ciclo">12. O ciclo completo, resumido</a></li>
+    <li><a href="#erros-comuns">13. Erros comuns nesta fase</a></li>
+    <li><a href="#checklist">14. Checklist antes de seguir</a></li>
+    <li><a href="#proximos-passos">15. O que vem a seguir</a></li>
+  </ol>
+  <a class="toc-next" href="05-conflitos-de-merge.html">5. Conflitos de merge &rarr;</a>
+</nav>
+
+<main>
+  <div class="eyebrow">Material de estudo — Git na prática — Parte 4</div>
+  <h1>Branches: trabalhar em paralelo</h1>
+  <p class="subtitle">Até aqui seu histórico foi uma linha reta. Esta aula quebra a linha. Branch é o recurso que o Git fez ser <strong>barato de propósito</strong> (lembra do requisito de 2005, na aula 1) e é a base de tudo que vem depois — Pull Request, code review, o fluxo de time inteiro. O truque pra entender branch sem decoreba é aceitar uma frase: <strong>branch não é uma cópia do projeto, é um ponteiro para um commit</strong>. Tudo o mais decorre daí.</p>
+
+  <h2 id="problema">1. O problema que branch resolve</h2>
+  <p>Você está no meio de uma mudança grande no <code>guia-de-cafes</code>. Metade feita, nada funcionando direito. Aí chega o pedido: "corrige o erro de digitação no título, é urgente".</p>
+  <p>Sem branch, as opções são todas ruins: commitar o trabalho pela metade só pra tirar da frente, ou fazer a correção urgente misturada com o trabalho inacabado, ou copiar a pasta inteira pra outro lugar — o <code>projeto-v2-final-AGORA-VAI</code> da aula 1.</p>
+  <p>Com branch, cada linha de trabalho fica isolada. A correção urgente sai de uma base limpa, e sua mudança pela metade continua exatamente onde estava, esperando.</p>
+  <p>Em time, o motivo é ainda mais direto: <strong>várias pessoas mexendo no mesmo projeto ao mesmo tempo</strong>, sem que o trabalho inacabado de uma apareça no de outra. É o assunto da aula 7.</p>
+
+  <h2 id="ponteiro">2. Branch é um ponteiro</h2>
+  <p>Vem de outras ferramentas a ideia de que branch é uma cópia do projeto. No Git, não é — e a diferença explica por que criar branch aqui é instantâneo enquanto no SVN era uma operação cara (aula 1, seção 2.2).</p>
+  <div class="rule">
+    <span class="tag">A definição</span>
+    <p>Uma branch é um <strong>arquivo de texto com o hash de um commit dentro</strong>. Nada além disso. Criar uma branch é escrever 41 bytes em disco — por isso é instantâneo, independente do tamanho do projeto.</p>
+  </div>
+  <p>Dá pra ver com os próprios olhos:</p>
+  <pre><code>cat .git/refs/heads/main</code></pre>
+  <pre><code>f2e8d40c1a9b3e5d7f0a2c4e6b8d0f2a4c6e8b0d</code></pre>
+  <p>É esse o conteúdo inteiro da sua branch <code>main</code>: o hash do commit mais recente dela.</p>
+  <p>Lembrando da aula 1: cada commit aponta pro anterior. Então o ponteiro da branch, apontando pro commit mais recente, alcança toda a história a partir dali:</p>
+  <pre><code>49413d5 ──&gt; 64a8889 ──&gt; 4e993b8 ──&gt; f2e8d40
+                                        ↑
+                                      main</code></pre>
+  <p>E quando você faz um commit novo, <strong>o ponteiro anda pra frente sozinho</strong>:</p>
+  <pre><code>49413d5 ──&gt; 64a8889 ──&gt; 4e993b8 ──&gt; f2e8d40 ──&gt; a1c9e33
+                                                    ↑
+                                                  main</code></pre>
+  <p>É só isso que uma branch faz. Ter duas branches é ter dois ponteiros para pontos diferentes do mesmo grafo de commits.</p>
+
+  <h2 id="head">3. <code>HEAD</code>: onde você está</h2>
+  <p><code>HEAD</code> apareceu na aula 2 traduzido como "onde eu estou agora". Agora dá pra ser preciso: <strong><code>HEAD</code> é um ponteiro para a branch em que você está</strong> — um ponteiro para um ponteiro.</p>
+  <pre><code>cat .git/HEAD</code></pre>
+  <pre><code>ref: refs/heads/main</code></pre>
+  <p>Ele não guarda um hash: guarda o nome da branch atual. É isso que o <code>(HEAD -&gt; main)</code> do <code>git log</code> vem dizendo desde a aula 2.</p>
+  <p>Com isso, dá pra descrever o que um commit faz em uma frase exata: <strong>o commit é criado apontando pro commit atual, e a branch para a qual o <code>HEAD</code> aponta anda pra frente</strong>. Trocar de branch é mudar para onde o <code>HEAD</code> aponta — e o Git trocar os arquivos da sua pasta pra corresponder.</p>
+
+  <h2 id="criando">4. Criando e trocando de branch</h2>
+  <p>Confira o ponto de partida:</p>
+  <pre><code>cd ~/projetos/guia-de-cafes
+git status
+git branch</code></pre>
+  <pre><code>* main</code></pre>
+  <p><code>git branch</code> sem argumento <strong>lista</strong> as branches. O asterisco marca em qual você está. Por enquanto só existe uma.</p>
+
+  <h3>4.1 O comando do dia a dia</h3>
+  <pre><code>git switch -c metodos-frios</code></pre>
+  <pre><code>Switched to a new branch 'metodos-frios'</code></pre>
+  <p>Duas coisas num comando: <code>-c</code> (de <em>create</em>) cria a branch, e o <code>switch</code> move o <code>HEAD</code> pra ela. Confira:</p>
+  <pre><code>git branch</code></pre>
+  <pre><code>  main
+* metodos-frios</code></pre>
+  <p>E o estado do grafo agora:</p>
+  <pre><code>49413d5 ──&gt; 64a8889 ──&gt; 4e993b8 ──&gt; f2e8d40
+                                        ↑
+                                  main, metodos-frios
+                                        ↑
+                                      HEAD</code></pre>
+  <p><strong>As duas branches apontam pro mesmo commit.</strong> Nenhum arquivo mudou, nada foi copiado — só existe um ponteiro novo. É por isso que criar branch não tem custo.</p>
+
+  <h3>4.2 As variações</h3>
+  <table>
+    <thead>
+      <tr><th>Comando</th><th>Faz</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>git branch</code></td><td>Lista as branches locais</td></tr>
+      <tr><td><code>git branch nome</code></td><td>Cria a branch, mas <strong>não</strong> troca pra ela</td></tr>
+      <tr><td><code>git switch nome</code></td><td>Troca para uma branch existente</td></tr>
+      <tr><td><code>git switch -c nome</code></td><td>Cria e troca. O mais usado</td></tr>
+      <tr><td><code>git switch -</code></td><td>Volta pra branch anterior. Atalho ótimo pra vai-e-volta</td></tr>
+      <tr><td><code>git switch -c nome abc1234</code></td><td>Cria a branch a partir de um commit específico, não do atual</td></tr>
+      <tr><td><code>git branch -v</code></td><td>Lista mostrando o último commit de cada uma</td></tr>
+    </tbody>
+  </table>
+  <div class="callout"><p><strong>Sobre <code>checkout</code>:</strong> como visto na aula 3, seção 13, o mesmo se faz com <code>git checkout -b nome</code>. Funciona e você vai ver muito por aí. Prefira <code>switch</code> — foi criado justamente pra separar "trocar de branch" de "restaurar arquivo".</p></div>
+  <p>Sobre o nome da branch: por enquanto use algo descritivo e sem espaço. Times têm convenção própria (<code>feature/</code>, <code>fix/</code>, número do ticket) — isso é assunto da aula 7.</p>
+
+  <h2 id="trabalhando">5. Trabalhando na branch</h2>
+  <p>Estando em <code>metodos-frios</code>, o ciclo é o mesmo de sempre:</p>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.html</span> — dentro do <code>&lt;ul&gt;</code>, acrescente duas linhas no fim da lista:</p>
+  </div>
+  <pre><code>    &lt;li&gt;Aeropress&lt;/li&gt;
+<span class="ln-add">    &lt;li&gt;Cold brew&lt;/li&gt;</span>
+<span class="ln-add">    &lt;li&gt;Café gelado batido&lt;/li&gt;</span>
+  &lt;/ul&gt;</code></pre>
+  <pre><code>git add index.html
+git commit -m "Adiciona metodos frios na lista"</code></pre>
+  <p>Agora o grafo se separou de verdade:</p>
+  <pre><code>4e993b8 ──&gt; f2e8d40 ──&gt; b7d2a10
+                ↑            ↑
+              main    metodos-frios
+                             ↑
+                           HEAD</code></pre>
+  <p><code>main</code> ficou parada onde estava. Ela só anda quando <em>você</em> commita estando nela.</p>
+  <p>Veja isso desenhado pelo próprio Git — é aqui que aquelas quatro flags da aula 3 finalmente valem a pena:</p>
+  <pre><code>git log --oneline --graph --decorate --all</code></pre>
+  <pre><code>* b7d2a10 (HEAD -&gt; metodos-frios) Adiciona metodos frios na lista
+* f2e8d40 (main) Revert "Adiciona comentarios de rascunho no index"
+* a7b3c91 Adiciona comentarios de rascunho no index</code></pre>
+
+  <h2 id="trocar">6. O que acontece ao trocar de branch</h2>
+  <p>Volte pra <code>main</code> e abra o <code>index.html</code>:</p>
+  <pre><code>git switch main</code></pre>
+  <pre><code>Switched to branch 'main'</code></pre>
+  <p><strong>Cold brew e café gelado sumiram do arquivo.</strong> Não foram perdidos: estão no commit <code>b7d2a10</code>, que continua existindo, alcançável pelo ponteiro <code>metodos-frios</code>. O que o Git fez foi reescrever os arquivos da sua pasta pra corresponder ao commit que a <code>main</code> aponta.</p>
+  <p>Volte e confira que reaparecem:</p>
+  <pre><code>git switch metodos-frios</code></pre>
+  <p>Essa é a parte que impressiona no começo: <strong>uma pasta só, que muda de conteúdo conforme a branch</strong>. Não existem duas cópias em disco.</p>
+
+  <h3>6.1 Trocar com trabalho pendente</h3>
+  <p>Se você tentar trocar de branch com alterações não commitadas que conflitam com o destino, o Git recusa:</p>
+  <pre><code>error: Your local changes to the following files would be overwritten by checkout:
+	index.html
+Please commit your changes or stash them before you switch branches.</code></pre>
+  <p>É proteção, não erro: trocar sobrescreveria seu trabalho. As saídas são as da mensagem — commitar, ou guardar temporariamente com <code>git stash</code> (aula 9).</p>
+  <div class="callout"><p><strong>Detalhe que confunde:</strong> quando a alteração pendente <em>não</em> conflita com o destino, o Git deixa trocar e <strong>leva a alteração junto</strong> pra outra branch. Não é bug — é conveniência. Mas é fonte de "commitei na branch errada", o erro mais comum desta aula. Hábito que resolve: <code>git status</code> antes de trocar, e trocar só com <code>working tree clean</code>.</p></div>
+
+  <h2 id="detached">7. Detached HEAD: o aviso que assusta</h2>
+  <p>Na aula 3 apareceu <code>git checkout abc1234</code> pra navegar até um commit antigo. Se você fizer isso, o Git imprime um texto longo começando com:</p>
+  <pre><code>You are in 'detached HEAD' state.</code></pre>
+  <p>Traduzindo com o que você já sabe: normalmente o <code>HEAD</code> aponta pra uma <em>branch</em>. Aqui ele está apontando <strong>direto pra um commit</strong>, sem branch no meio. Está "solto".</p>
+  <p>Isso não quebrou nada. Você pode olhar arquivos, rodar o projeto, investigar como as coisas eram. O risco é só um: <strong>commits feitos nesse estado não pertencem a branch nenhuma</strong>. Ao trocar de branch depois, eles ficam sem ponteiro — e somem da vista (recuperáveis pelo <code>reflog</code> da aula 9, mas o susto é grande).</p>
+  <p>Como sair:</p>
+  <pre><code>git switch main                    # só olhei, quero voltar
+git switch -c nome-da-branch       # commitei aqui e quero manter o trabalho</code></pre>
+  <p>O segundo comando cria uma branch apontando pro commit onde você está — os commits soltos ganham dono e param de correr risco.</p>
+
+  <h2 id="merge-ff">8. Merge fast-forward</h2>
+  <p>Trabalho pronto na branch, hora de trazer pra <code>main</code>. O merge sempre segue a mesma lógica: <strong>vá para a branch que vai receber, e mande vir</strong>.</p>
+  <pre><code>git switch main
+git merge metodos-frios</code></pre>
+  <pre><code>Updating f2e8d40..b7d2a10
+Fast-forward
+ index.html | 2 ++
+ 1 file changed, 2 insertions(+)</code></pre>
+  <p>Repare no <strong><code>Fast-forward</code></strong>. Ele acontece numa situação específica: <strong>a <code>main</code> não andou nada desde que a branch nasceu</strong>. Não há o que combinar — os commits da branch já continuam a história da main em linha reta.</p>
+  <p>Então o Git faz a coisa mais simples possível: <strong>arrasta o ponteiro da <code>main</code> pra frente</strong>. Nenhum commit novo é criado.</p>
+  <pre><code>Antes:
+4e993b8 ──&gt; f2e8d40 ──&gt; b7d2a10
+                ↑            ↑
+              main    metodos-frios
+
+Depois:
+4e993b8 ──&gt; f2e8d40 ──&gt; b7d2a10
+                             ↑
+                    main, metodos-frios</code></pre>
+  <p>Histórico continua linear. Olhando o <code>log</code> depois, não há sinal de que uma branch existiu.</p>
+
+  <h2 id="merge-commit">9. Merge commit</h2>
+  <p>O outro caso é o que acontece de verdade em time: <strong>a <code>main</code> andou enquanto você trabalhava na sua branch</strong>. As duas histórias divergiram, e aí é preciso combinar.</p>
+
+  <h3>9.1 Provocando a divergência</h3>
+  <p>Crie uma branch nova e faça um commit nela:</p>
+  <pre><code>git switch -c rodape</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">index.html</span> — antes do <code>&lt;/body&gt;</code>, acrescente o rodapé:</p>
+  </div>
+  <pre><code>  &lt;/ul&gt;
+<span class="ln-add">  &lt;footer&gt;Guia mantido para estudo de Git.&lt;/footer&gt;</span>
+&lt;/body&gt;</code></pre>
+  <pre><code>git commit -am "Adiciona rodape na pagina"</code></pre>
+  <p>Agora vá pra <code>main</code> e faça um commit lá também, <strong>em outro arquivo</strong>:</p>
+  <pre><code>git switch main</code></pre>
+  <div class="edit-step">
+    <p><span class="action action-edit">Alterar</span> <span class="file">README.md</span> — acrescente uma linha no fim:</p>
+  </div>
+  <pre><code>Projeto usado para estudar Git.
+<span class="ln-add">
+Cada metodo tera sua propria pagina no futuro.</span></code></pre>
+  <pre><code>git commit -am "Anota plano de paginas por metodo no README"</code></pre>
+  <p>O grafo bifurcou:</p>
+  <pre><code>                    ┌──&gt; c3f8e21 (rodape)
+b7d2a10 ──&gt; ────────┤
+                    └──&gt; d9a4b60 (main) ←── HEAD</code></pre>
+  <div class="callout"><p><strong>Por que arquivos diferentes:</strong> as duas mudanças foram feitas de propósito em arquivos separados, então o Git resolve a combinação sozinho. Quando as duas branches mexem <strong>na mesma linha do mesmo arquivo</strong>, ele não consegue decidir e para pedindo ajuda — isso é conflito, e é a aula 5 inteira.</p></div>
+
+  <h3>9.2 O merge</h3>
+  <pre><code>git merge rodape</code></pre>
+  <p>Desta vez o Git abre o editor com uma mensagem pronta (<code>Merge branch 'rodape'</code>). Salve e feche.</p>
+  <pre><code>Merge made by the 'recursive' strategy.
+ index.html | 1 +
+ 1 file changed, 1 insertion(+)</code></pre>
+  <p>Não é mais fast-forward. Como as duas histórias divergiram, o Git precisou <strong>criar um commit novo</strong> pra unir as duas pontas:</p>
+  <pre><code>                    ┌──&gt; c3f8e21 ──┐
+b7d2a10 ──&gt; ────────┤               ├──&gt; e5b1f77 (main)
+                    └──&gt; d9a4b60 ──┘</code></pre>
+  <p>Esse é o <strong>merge commit</strong>, e ele tem uma característica única: <strong>dois pais</strong>, um de cada branch. Todos os outros commits têm um só.</p>
+  <p>É aqui que fecha o detalhe pendente da aula 3, seção 5: <code>HEAD~1</code> e <code>HEAD^</code> são iguais em commit normal, mas num merge commit existem dois pais — <code>HEAD^1</code> é o primeiro (a branch que recebeu), <code>HEAD^2</code> é o segundo (a que veio).</p>
+  <p>Confira o desenho:</p>
+  <pre><code>git log --oneline --graph</code></pre>
+  <pre><code>*   e5b1f77 (HEAD -&gt; main) Merge branch 'rodape'
+|\
+| * c3f8e21 (rodape) Adiciona rodape na pagina
+* | d9a4b60 Anota plano de paginas por metodo no README
+|/
+* b7d2a10 Adiciona metodos frios na lista</code></pre>
+
+  <h3>9.3 Os dois tipos, lado a lado</h3>
+  <table>
+    <thead>
+      <tr><th>&nbsp;</th><th>Fast-forward</th><th>Merge commit</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Quando acontece</td><td>A branch de destino não andou</td><td>As duas andaram</td></tr>
+      <tr><td>Cria commit?</td><td>Não, só move o ponteiro</td><td>Sim, com dois pais</td></tr>
+      <tr><td>Histórico fica</td><td>Linear</td><td>Com bifurcação visível</td></tr>
+      <tr><td>Registra que houve branch?</td><td>Não</td><td>Sim</td></tr>
+      <tr><td>Pode dar conflito?</td><td>Nunca</td><td>Sim (aula 5)</td></tr>
+    </tbody>
+  </table>
+  <p>Você não escolhe entre os dois: o Git decide pela situação. O que dá pra fazer é <strong>forçar</strong> o segundo — próxima seção.</p>
+
+  <h2 id="no-ff">10. Forçando merge commit com <code>--no-ff</code></h2>
+  <pre><code>git merge --no-ff metodos-frios</code></pre>
+  <p>A flag <code>--no-ff</code> ("no fast-forward") manda criar merge commit mesmo quando o atalho seria possível.</p>
+  <p>Motivo de existir: <strong>preservar no histórico o registro de que aquele conjunto de commits foi uma unidade de trabalho</strong>. Com fast-forward, os commits da branch se misturam à linha principal e some a informação de que pertenciam à mesma tarefa. Com merge commit, dá pra ver o agrupamento — e reverter a tarefa inteira de uma vez.</p>
+  <p>O custo é um histórico mais poluído: um merge commit por tarefa, muitos deles sem conteúdo próprio.</p>
+  <p>Não existe consenso de mercado — é decisão de time, e cada lado tem argumento honesto:</p>
+  <div class="example">
+    <div class="good">
+      <h4>Prefere <code>--no-ff</code></h4>
+      <p>"Quero ver no histórico onde cada tarefa começou e terminou, e poder reverter uma tarefa inteira num comando."</p>
+    </div>
+    <div class="bad">
+      <h4>Prefere fast-forward</h4>
+      <p>"Merge commit sem conteúdo é ruído. Quero o <code>log</code> legível como uma lista de mudanças reais."</p>
+    </div>
+  </div>
+  <p>Na prática do dia a dia, quem decide isso é a configuração do GitHub no repositório do time — as três opções de merge de um Pull Request, assunto da aula 7.</p>
+
+  <h2 id="deletar">11. Deletando branch</h2>
+  <p>Depois do merge, a branch cumpriu o papel. Os commits dela já estão na <code>main</code>; o ponteiro sobrando só polui a lista.</p>
+  <pre><code>git branch -d rodape</code></pre>
+  <pre><code>Deleted branch rodape (was c3f8e21).</code></pre>
+  <div class="rule">
+    <span class="tag">O que deletar uma branch faz</span>
+    <p><strong>Apaga o ponteiro, não os commits.</strong> Se a branch foi mergeada, seus commits continuam alcançáveis pela <code>main</code> — nada se perde. É só remover a etiqueta de um trabalho concluído.</p>
+  </div>
+
+  <h3>11.1 <code>-d</code> e <code>-D</code></h3>
+  <p>O <code>-d</code> minúsculo é seguro: ele <strong>recusa</strong> apagar uma branch cujos commits ainda não estão em lugar nenhum.</p>
+  <pre><code>git branch -d experimento</code></pre>
+  <pre><code>error: The branch 'experimento' is not fully merged.
+If you are sure you want to delete it, run 'git branch -D experimento'.</code></pre>
+  <p>Isso é o Git avisando: "esses commits só existem aqui, apagar o ponteiro deixa eles órfãos".</p>
+  <div class="warn"><p>O <code>-D</code> maiúsculo apaga assim mesmo, sem perguntar. Use só quando a intenção for realmente jogar o trabalho fora — uma tentativa que não deu certo, por exemplo. Os commits ficam recuperáveis pelo <code>git reflog</code> por algumas semanas (aula 9), mas nenhum ponteiro aponta mais pra eles.</p></div>
+  <p>Comandos úteis pra fazer essa faxina:</p>
+  <pre><code>git branch --merged      # branches já incorporadas: seguras de apagar
+git branch --no-merged   # branches com trabalho ainda não mergeado</code></pre>
+  <p>Deletar branch mergeada é hábito de higiene. Repositório de time com 60 branches velhas na lista é atrito puro na hora de procurar a certa.</p>
+
+  <h2 id="ciclo">12. O ciclo completo, resumido</h2>
+  <p>É este o ciclo que se repete o dia inteiro em qualquer time. Vale memorizar a forma, não os detalhes:</p>
+  <div class="step">
+    <div class="step-number">1</div>
+    <h3>Parta de uma base limpa</h3>
+    <p><code>git switch main</code> e confirme <code>working tree clean</code>.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">2</div>
+    <h3>Crie a branch da tarefa</h3>
+    <p><code>git switch -c nome-da-tarefa</code>. Uma branch por tarefa, sempre.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">3</div>
+    <h3>Trabalhe e commite ali</h3>
+    <p>O ciclo da aula 2, sem mudança nenhuma. Vários commits pequenos.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">4</div>
+    <h3>Traga pra main</h3>
+    <p><code>git switch main</code> e <code>git merge nome-da-tarefa</code>.</p>
+  </div>
+  <div class="step">
+    <div class="step-number">5</div>
+    <h3>Limpe</h3>
+    <p><code>git branch -d nome-da-tarefa</code>.</p>
+  </div>
+  <p>A partir da aula 6 esse ciclo ganha o remoto no meio, e na aula 7 o passo 4 deixa de ser um <code>merge</code> na sua máquina e passa a ser um Pull Request revisado por outra pessoa. A forma continua a mesma.</p>
+
+  <h2 id="erros-comuns">13. Erros comuns nesta fase</h2>
+  <ol>
+    <li><strong>Commitar na branch errada.</strong> O mais comum de todos, quase sempre commitando na <code>main</code> sem perceber. Prevenção: <code>git status</code> antes de commitar — a primeira linha diz a branch. Correção: <code>git reset --soft HEAD~1</code> (aula 3), trocar de branch e commitar de novo.</li>
+    <li><strong>Mergear na direção errada.</strong> <code>git merge</code> traz a outra branch <em>pra dentro</em> da atual. Estar na branch de feature e rodar <code>git merge main</code> não publica sua feature — traz a main pra sua branch. Regra: <strong>vá para quem recebe</strong>.</li>
+    <li><strong>Criar branch a partir de uma branch desatualizada.</strong> Se você não voltou pra <code>main</code> antes de <code>switch -c</code>, a branch nova nasce em cima da anterior, herdando commits que não têm relação com a tarefa.</li>
+    <li><strong>Deixar branch viver semanas.</strong> Quanto mais tempo separada da <code>main</code>, mais as duas divergem e maior o conflito no fim. Branch curta é a principal medida preventiva contra conflito (aula 5).</li>
+    <li><strong>Pânico com detached HEAD.</strong> Não quebrou nada. <code>git switch main</code> resolve; se houver commit a salvar, <code>git switch -c nome</code> antes.</li>
+    <li><strong>Achar que deletar branch apaga commits.</strong> Se foi mergeada, não apaga nada — só o ponteiro.</li>
+  </ol>
+
+  <h2 id="checklist">14. Checklist antes de seguir</h2>
+  <div class="checklist">
+    <ul>
+      <li>Você consegue explicar, em uma frase, o que uma branch é fisicamente</li>
+      <li>Sabe dizer a diferença entre <code>HEAD</code> e o nome de uma branch</li>
+      <li>Criou branch, commitou nela, voltou pra <code>main</code> e viu os arquivos mudarem</li>
+      <li>Fez um merge fast-forward e sabe por que ele foi fast-forward</li>
+      <li>Fez um merge que gerou merge commit e sabe por que esse precisou de commit</li>
+      <li>Consegue ler a saída de <code>git log --oneline --graph --all</code></li>
+      <li>Sabe a diferença entre <code>git branch -d</code> e <code>-D</code></li>
+      <li>Sabe em qual branch precisa estar antes de rodar <code>git merge</code></li>
+    </ul>
+  </div>
+
+  <h2 id="proximos-passos">15. O que vem a seguir</h2>
+  <p>Todos os merges desta aula deram certo sozinhos, de propósito — as mudanças estavam em arquivos ou linhas diferentes. A próxima aula quebra isso.</p>
+  <div class="next-steps">
+    <ol>
+      <li><strong>Conflitos de merge</strong> — provocar um conflito de verdade no <code>guia-de-cafes</code>, ler os marcadores <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> no arquivo, resolver na mão, e <code>git merge --abort</code> pra desistir no meio. Mais o que reduz a frequência de conflito num time.</li>
+      <li><strong>Repositório remoto: GitHub</strong> — o projeto sai da sua máquina.</li>
+      <li><strong>Fluxo de time</strong> — branch e merge viram Pull Request e code review.</li>
+    </ol>
+  </div>
+
+  <footer class="closing">
+    <p>Se alguma coisa aqui ficou nebulosa, quase sempre é o modelo do ponteiro. Vale repetir o exercício olhando o grafo a cada passo: <code>git log --oneline --graph --decorate --all</code> depois de criar branch, depois de commitar, depois de trocar, depois de mergear. Ver o desenho mudar a cada comando resolve em minutos o que a explicação em texto leva páginas.</p>
+  </footer>
+</main>
+
+</div>
+</body>
+</html>
